@@ -1,12 +1,12 @@
 import React from "react";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
-import MainTabNavigator from "@/navigation/MainTabNavigator";
-import ModalScreen from "@/screens/ModalScreen";
+import HomeScreen from "@/screens/HomeScreen";
 import { useScreenOptions } from "@/hooks/useScreenOptions";
+import { HeaderTitle } from "@/components/HeaderTitle";
+import { Colors } from "@/constants/theme";
 
 export type RootStackParamList = {
-  Main: undefined;
-  Modal: undefined;
+  Home: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -15,18 +15,17 @@ export default function RootStackNavigator() {
   const screenOptions = useScreenOptions();
 
   return (
-    <Stack.Navigator screenOptions={screenOptions}>
+    <Stack.Navigator
+      screenOptions={{
+        ...screenOptions,
+        contentStyle: { backgroundColor: Colors.dark.backgroundRoot },
+      }}
+    >
       <Stack.Screen
-        name="Main"
-        component={MainTabNavigator}
-        options={{ headerShown: false }}
-      />
-      <Stack.Screen
-        name="Modal"
-        component={ModalScreen}
+        name="Home"
+        component={HomeScreen}
         options={{
-          presentation: "modal",
-          headerTitle: "Modal",
+          headerTitle: () => <HeaderTitle title="AniStar" />,
         }}
       />
     </Stack.Navigator>

@@ -11,6 +11,7 @@ import { queryClient } from "@/lib/query-client";
 
 import RootStackNavigator from "@/navigation/RootStackNavigator";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { Colors } from "@/constants/theme";
 
 export default function App() {
   return (
@@ -22,7 +23,7 @@ export default function App() {
               <NavigationContainer>
                 <RootStackNavigator />
               </NavigationContainer>
-              <StatusBar style="auto" />
+              <StatusBar style="light" />
             </KeyboardProvider>
           </GestureHandlerRootView>
         </SafeAreaProvider>
@@ -34,5 +35,6 @@ export default function App() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
+    backgroundColor: Colors.dark.backgroundRoot,
   },
 });
