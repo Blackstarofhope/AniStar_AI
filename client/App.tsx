@@ -11,6 +11,7 @@ import { queryClient } from "@/lib/query-client";
 
 import RootStackNavigator from "@/navigation/RootStackNavigator";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { FavoritesProvider } from "@/contexts/FavoritesContext";
 import { Colors } from "@/constants/theme";
 
 export default function App() {
@@ -20,10 +21,12 @@ export default function App() {
         <SafeAreaProvider>
           <GestureHandlerRootView style={styles.root}>
             <KeyboardProvider>
-              <NavigationContainer>
-                <RootStackNavigator />
-              </NavigationContainer>
-              <StatusBar style="light" />
+              <FavoritesProvider>
+                <NavigationContainer>
+                  <RootStackNavigator />
+                </NavigationContainer>
+                <StatusBar style="light" />
+              </FavoritesProvider>
             </KeyboardProvider>
           </GestureHandlerRootView>
         </SafeAreaProvider>

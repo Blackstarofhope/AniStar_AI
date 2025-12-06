@@ -13,8 +13,10 @@ import { differenceInSeconds } from "date-fns";
 
 import { ThemedText } from "@/components/ThemedText";
 import { Colors, Spacing, BorderRadius } from "@/constants/theme";
+import { useFavorites } from "@/hooks/useFavorites";
 
 interface AnimeCardProps {
+  malId: number;
   title: string;
   imageUrl: string;
   nextAiringTime: Date | null;
@@ -54,6 +56,7 @@ function formatCountdown(targetDate: Date): string {
 }
 
 export function AnimeCard({
+  malId,
   title,
   imageUrl,
   nextAiringTime,
@@ -62,6 +65,8 @@ export function AnimeCard({
   onPress,
 }: AnimeCardProps) {
   const scale = useSharedValue(1);
+  const { isFavorite, toggleFavorite } = useFavorites();
+  const favorited = isFavorite(malId);
   const [countdown, setCountdown] = useState(
     nextAiringTime ? formatCountdown(nextAiringTime) : "TBA"
   );
@@ -88,6 +93,10 @@ export function AnimeCard({
     scale.value = withSpring(1, springConfig);
   };
 
+  const handleFavoritePress = () => {
+    toggleFavorite({ mal_id: malId, title, imageUrl });
+  };
+
   return (
     <AnimatedPressable
       onPress={onPress}
@@ -110,6 +119,20 @@ export function AnimeCard({
           <Ionicons name="time-outline" size={14} color={Colors.dark.accentSecondary} />
           <ThemedText style={styles.countdownText}>{countdown}</ThemedText>
         </View>
+        <Pressable
+          onPress={handleFavoritePress}
+          style={({ pressed }) => [
+            styles.favoriteButton,
+            { opacity: pressed ? 0.7 : 1 },
+          ]}
+          hitSlop={8}
+        >
+          <Ionicons
+            name={favorited ? "heart" : "heart-outline"}
+            size={20}
+            color={favorited ? Colors.dark.neonPink : Colors.dark.text}
+          />
+        </Pressable>
       </View>
       <View style={styles.content}>
         <ThemedText style={styles.title} numberOfLines={2}>
@@ -175,6 +198,17 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
     color: Colors.dark.accentSecondary,
+  },
+  favoriteButton: {
+    position: "absolute",
+    top: Spacing.md,
+    left: Spacing.md,
+    width: 36,
+    height: 36,
+    borderRadius: BorderRadius.full,
+    backgroundColor: "rgba(15, 15, 18, 0.85)",
+    justifyContent: "center",
+    alignItems: "center",
   },
   content: {
     padding: Spacing.lg,

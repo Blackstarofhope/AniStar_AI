@@ -1,15 +1,18 @@
-import React from "react";
-import { FlatList, View, StyleSheet, RefreshControl } from "react-native";
+import React, { useState } from "react";
+import { FlatList, View, StyleSheet, RefreshControl, ScrollView, Pressable } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useHeaderHeight } from "@react-navigation/elements";
 import { useQuery } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
-import { addDays, setHours, setMinutes, nextDay, parseISO } from "date-fns";
+import { useNavigation } from "@react-navigation/native";
+import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { addDays, setHours, setMinutes, nextDay } from "date-fns";
 
 import { AnimeCard } from "@/components/AnimeCard";
 import { SkeletonCard } from "@/components/SkeletonCard";
 import { ThemedText } from "@/components/ThemedText";
-import { Colors, Spacing } from "@/constants/theme";
+import { Colors, Spacing, BorderRadius } from "@/constants/theme";
+import { RootStackParamList } from "@/navigation/RootStackNavigator";
 
 interface AnimeItem {
   mal_id: number;
@@ -25,14 +28,14 @@ interface AnimeItem {
   };
   episodes?: number;
   score?: number;
-  aired?: {
-    from?: string;
-  };
 }
 
 interface JikanResponse {
   data: AnimeItem[];
 }
+
+const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 const DAY_MAP: { [key: string]: 0 | 1 | 2 | 3 | 4 | 5 | 6 } = {
   Sundays: 0,
@@ -78,13 +81,9 @@ function getNextAiringDate(broadcast?: { day?: string; time?: string }): Date | 
   return localBroadcast;
 }
 
-async function fetchAnimeSchedule(): Promise<AnimeItem[]> {
-  const days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
-  const today = new Date().getDay();
-  const todayName = days[(today + 6) % 7];
-
+async function fetchAnimeSchedule(day: string): Promise<AnimeItem[]> {
   const response = await fetch(
-    `https://api.jikan.moe/v4/schedules?filter=${todayName}&sfw=true&page=1`
+    `https://api.jikan.moe/v4/schedules?filter=${day}&sfw=true&page=1`
   );
 
   if (!response.ok) {
@@ -95,9 +94,16 @@ async function fetchAnimeSchedule(): Promise<AnimeItem[]> {
   return data.data || [];
 }
 
+type NavigationProp = NativeStackNavigationProp<RootStackParamList, "Home">;
+
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
+  const navigation = useNavigation<NavigationProp>();
+  
+  const today = new Date().getDay();
+  const todayIndex = (today + 6) % 7;
+  const [selectedDay, setSelectedDay] = useState(todayIndex);
 
   const {
     data: animeList,
@@ -106,18 +112,28 @@ export default function HomeScreen() {
     refetch,
     isRefetching,
   } = useQuery<AnimeItem[]>({
-    queryKey: ["/api/anime/schedule"],
-    queryFn: fetchAnimeSchedule,
+    queryKey: ["/api/anime/schedule", DAYS[selectedDay]],
+    queryFn: () => fetchAnimeSchedule(DAYS[selectedDay]),
     staleTime: 5 * 60 * 1000,
   });
 
+  const handleAnimePress = (anime: AnimeItem) => {
+    navigation.navigate("AnimeDetail", {
+      animeId: anime.mal_id,
+      title: anime.title,
+      imageUrl: anime.images.jpg.large_image_url,
+    });
+  };
+
   const renderItem = ({ item }: { item: AnimeItem }) => (
     <AnimeCard
+      malId={item.mal_id}
       title={item.title}
       imageUrl={item.images.jpg.large_image_url}
       nextAiringTime={getNextAiringDate(item.broadcast)}
       episodes={item.episodes}
       score={item.score}
+      onPress={() => handleAnimePress(item)}
     />
   );
 
@@ -142,17 +158,56 @@ export default function HomeScreen() {
   const renderEmpty = () => (
     <View style={styles.emptyContainer}>
       <Ionicons name="film-outline" size={64} color={Colors.dark.textSecondary} />
-      <ThemedText style={styles.emptyText}>No anime airing today</ThemedText>
+      <ThemedText style={styles.emptyText}>No anime airing on {DAY_LABELS[selectedDay]}</ThemedText>
+    </View>
+  );
+
+  const renderDayTabs = () => (
+    <View style={styles.tabsWrapper}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.tabsContainer}
+      >
+        {DAY_LABELS.map((label, index) => {
+          const isSelected = selectedDay === index;
+          const isToday = index === todayIndex;
+          return (
+            <Pressable
+              key={label}
+              onPress={() => setSelectedDay(index)}
+              style={({ pressed }) => [
+                styles.tabButton,
+                isSelected && styles.tabButtonSelected,
+                { opacity: pressed ? 0.7 : 1 },
+              ]}
+            >
+              <ThemedText
+                style={[
+                  styles.tabText,
+                  isSelected && styles.tabTextSelected,
+                ]}
+              >
+                {label}
+              </ThemedText>
+              {isToday ? <View style={styles.todayDot} /> : null}
+            </Pressable>
+          );
+        })}
+      </ScrollView>
     </View>
   );
 
   if (isLoading) {
     return (
       <View style={styles.container}>
+        <View style={{ paddingTop: headerHeight + Spacing.xl }}>
+          {renderDayTabs()}
+        </View>
         <FlatList
           style={styles.list}
           contentContainerStyle={{
-            paddingTop: headerHeight + Spacing.xl,
+            paddingTop: Spacing.lg,
             paddingBottom: insets.bottom + Spacing.xl,
             paddingHorizontal: Spacing.lg,
           }}
@@ -168,12 +223,10 @@ export default function HomeScreen() {
   if (isError) {
     return (
       <View style={styles.container}>
-        <View
-          style={[
-            styles.centeredContent,
-            { paddingTop: headerHeight + Spacing.xl },
-          ]}
-        >
+        <View style={{ paddingTop: headerHeight + Spacing.xl }}>
+          {renderDayTabs()}
+        </View>
+        <View style={styles.centeredContent}>
           {renderError()}
         </View>
       </View>
@@ -182,10 +235,13 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
+      <View style={{ paddingTop: headerHeight + Spacing.xl }}>
+        {renderDayTabs()}
+      </View>
       <FlatList
         style={styles.list}
         contentContainerStyle={{
-          paddingTop: headerHeight + Spacing.xl,
+          paddingTop: Spacing.lg,
           paddingBottom: insets.bottom + Spacing.xl,
           paddingHorizontal: Spacing.lg,
           flexGrow: 1,
@@ -249,5 +305,41 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: Colors.dark.textSecondary,
     marginTop: Spacing.lg,
+  },
+  tabsWrapper: {
+    marginBottom: Spacing.sm,
+  },
+  tabsContainer: {
+    paddingHorizontal: Spacing.lg,
+    gap: Spacing.sm,
+  },
+  tabButton: {
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.full,
+    backgroundColor: Colors.dark.backgroundDefault,
+    borderWidth: 1,
+    borderColor: Colors.dark.glassBorder,
+    alignItems: "center",
+  },
+  tabButtonSelected: {
+    backgroundColor: Colors.dark.accent,
+    borderColor: Colors.dark.accent,
+  },
+  tabText: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: Colors.dark.textSecondary,
+  },
+  tabTextSelected: {
+    color: Colors.dark.text,
+    fontWeight: "600",
+  },
+  todayDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: Colors.dark.accentSecondary,
+    marginTop: 4,
   },
 });
