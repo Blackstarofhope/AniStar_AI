@@ -22,6 +22,17 @@ const scheduleCache = new Map<string, CacheEntry<AnimeScheduleItem[]>>();
 const detailsCache = new Map<number, CacheEntry<AnimeScheduleItem>>();
 const anilistCache = new Map<number, CacheEntry<Partial<AnimeScheduleItem>>>();
 
+const KIDS_RATINGS = new Set(["G - All Ages", "PG - Children"]);
+
+function isKidsShow(item: AnimeScheduleItem): boolean {
+  if (item.rating && KIDS_RATINGS.has(item.rating)) return true;
+  if (item.genres) {
+    const genreNames = item.genres.map((g) => g.name.toLowerCase());
+    if (genreNames.includes("kids")) return true;
+  }
+  return false;
+}
+
 const JIKAN_BASE = "https://api.jikan.moe/v4";
 const ANILIST_BASE = "https://graphql.anilist.co";
 
@@ -45,9 +56,11 @@ export async function getSchedule(day: string): Promise<AnimeScheduleItem[]> {
 
   try {
     const data = await jikanFetch<{ data: AnimeScheduleItem[] }>(
-      `${JIKAN_BASE}/schedules?filter=${key}&sfw=true&page=1`
+      `${JIKAN_BASE}/schedules?filter=${key}&kids=false&sfw=true&page=1`
     );
-    const items = data.data || [];
+    const items = (data.data || [])
+      .filter((a) => !isKidsShow(a))
+      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
     scheduleCache.set(key, { data: items, timestamp: Date.now() });
     return items;
   } catch {
@@ -66,7 +79,45 @@ export async function getSeasonalAnime(): Promise<AnimeScheduleItem[]> {
     const data = await jikanFetch<{ data: AnimeScheduleItem[] }>(
       `${JIKAN_BASE}/seasons/now?limit=25&sfw=true`
     );
-    const items = data.data || [];
+    const items = (data.data || []).filter((a) => !isKidsShow(a));
+    scheduleCache.set(key, { data: items, timestamp: Date.now() });
+    return items;
+  } catch {
+    return cached?.data || [];
+  }
+}
+
+async function getPopularAiring(): Promise<AnimeScheduleItem[]> {
+  const key = "popular_airing";
+  const cached = scheduleCache.get(key);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.data;
+  }
+
+  try {
+    const [byScore, byMembers] = await Promise.allSettled([
+      jikanFetch<{ data: AnimeScheduleItem[] }>(
+        `${JIKAN_BASE}/anime?type=tv&status=airing&order_by=score&sort=desc&min_score=6&sfw=true&page=1&limit=25`
+      ),
+      jikanFetch<{ data: AnimeScheduleItem[] }>(
+        `${JIKAN_BASE}/anime?type=tv&status=airing&order_by=members&sort=desc&sfw=true&page=1&limit=25`
+      ),
+    ]);
+
+    const seen = new Set<number>();
+    const items: AnimeScheduleItem[] = [];
+
+    for (const result of [byScore, byMembers]) {
+      if (result.status === "fulfilled") {
+        for (const a of result.value.data || []) {
+          if (!seen.has(a.mal_id) && !isKidsShow(a)) {
+            seen.add(a.mal_id);
+            items.push(a);
+          }
+        }
+      }
+    }
+
     scheduleCache.set(key, { data: items, timestamp: Date.now() });
     return items;
   } catch {
@@ -168,25 +219,26 @@ export async function getAllCurrentAnime(): Promise<AnimeScheduleItem[]> {
   const seen = new Set<number>();
   const result: AnimeScheduleItem[] = [];
 
-  const seasonal = await getSeasonalAnime();
-  for (const a of seasonal) {
-    if (!seen.has(a.mal_id)) {
-      seen.add(a.mal_id);
-      result.push(a);
-    }
-  }
+  const [seasonal, popular, ...dayResults] = await Promise.allSettled([
+    getSeasonalAnime(),
+    getPopularAiring(),
+    ...days.map((d) => getSchedule(d)),
+  ]);
 
-  const dayResults = await Promise.allSettled(days.map((d) => getSchedule(d)));
-  for (const r of dayResults) {
+  const allSources = [seasonal, popular, ...dayResults];
+
+  for (const r of allSources) {
     if (r.status === "fulfilled") {
       for (const a of r.value) {
-        if (!seen.has(a.mal_id)) {
+        if (!seen.has(a.mal_id) && !isKidsShow(a)) {
           seen.add(a.mal_id);
           result.push(a);
         }
       }
     }
   }
+
+  result.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 
   return result;
 }
