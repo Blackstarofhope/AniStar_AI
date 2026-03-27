@@ -231,8 +231,9 @@ export async function processFeedback(
 
     let totalGoodness = 0;
     for (const sample of trainingBatch) {
-      const positive = sample.embedding;
-      const negative = createCorruptedInput(sample.embedding);
+      const liked = sample.rating > 0.5;
+      const positive = liked ? sample.embedding : createCorruptedInput(sample.embedding);
+      const negative = liked ? createCorruptedInput(sample.embedding) : sample.embedding;
 
       const g = trainStep(eng.network, positive, negative);
       totalGoodness += g;
