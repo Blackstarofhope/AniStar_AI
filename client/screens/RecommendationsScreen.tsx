@@ -4,6 +4,7 @@ import {
   StyleSheet,
   Pressable,
   ScrollView,
+  RefreshControl,
   KeyboardAvoidingView,
   Platform,
 } from "react-native";
@@ -117,7 +118,19 @@ function RecStrip({
   onCardPress: (item: Recommendation) => void;
 }) {
   return (
-    <View style={stripStyles.container}>
+    <ScrollView
+      scrollEnabled={false}
+      style={stripStyles.outerScroll}
+      contentContainerStyle={stripStyles.container}
+      refreshControl={
+        <RefreshControl
+          refreshing={isFetching}
+          onRefresh={onRefetch}
+          tintColor={Colors.dark.accent}
+          colors={[Colors.dark.accent]}
+        />
+      }
+    >
       <View style={stripStyles.labelRow}>
         <Ionicons name="sparkles-outline" size={13} color={Colors.dark.accent} />
         <ThemedText style={stripStyles.label}>Star&apos;s Top Picks</ThemedText>
@@ -177,7 +190,7 @@ function RecStrip({
           )}
         </ScrollView>
       )}
-    </View>
+    </ScrollView>
   );
 }
 
@@ -249,6 +262,9 @@ const styles = StyleSheet.create({
 });
 
 const stripStyles = StyleSheet.create({
+  outerScroll: {
+    flexShrink: 0,
+  },
   container: {
     backgroundColor: Colors.dark.backgroundRoot,
     borderBottomWidth: 1,
