@@ -1,8 +1,9 @@
-import type { FFNetworkState } from "./forwardForward.js";
+import type { FFNetworkState, FFLayer } from "./forwardForward.js";
 import {
-  growLayer, pruneLayer, getLayerActivationEntropy, getTotalNeurons
+  growLayer, pruneLayerWithIndices, getLayerActivationEntropy
 } from "./forwardForward.js";
 import { resizeKuramoto, type KuramotoState } from "./kuramoto.js";
+import { randn } from "./matrix.js";
 
 const ENTROPY_THRESHOLD_LOW = 0.2;
 const ENTROPY_THRESHOLD_HIGH = 0.85;
@@ -24,6 +25,22 @@ export function createNeurogenesisState(numLayers: number): NeurogenesisState {
     growthEvents: 0,
     pruneEvents: 0,
   };
+}
+
+function growNextLayerInputs(nextLayer: FFLayer, numNew: number): void {
+  const inputSize = nextLayer.weights[0]?.length ?? 0;
+  const std = Math.sqrt(2 / (inputSize + numNew));
+  for (let i = 0; i < nextLayer.weights.length; i++) {
+    for (let n = 0; n < numNew; n++) {
+      nextLayer.weights[i].push(randn() * std);
+    }
+  }
+}
+
+function pruneNextLayerInputs(nextLayer: FFLayer, keepIndices: Set<number>): void {
+  for (let i = 0; i < nextLayer.weights.length; i++) {
+    nextLayer.weights[i] = nextLayer.weights[i].filter((_, j) => keepIndices.has(j));
+  }
 }
 
 export function checkNeurogenesis(
@@ -64,10 +81,16 @@ export function checkNeurogenesis(
       ngState.epochsBelowThreshold[i] >= EPOCHS_TO_TRIGGER &&
       layer.biases.length < MAX_NEURONS_PER_LAYER
     ) {
+      const oldSize = layer.biases.length;
       net.layers[i] = growLayer(layer, layerInputSizes[i]);
+      const numNew = net.layers[i].biases.length - oldSize;
       ngState.epochsBelowThreshold[i] = 0;
       ngState.growthEvents++;
       grown = true;
+
+      if (i + 1 < net.layers.length) {
+        growNextLayerInputs(net.layers[i + 1], numNew);
+      }
 
       const newSize = net.layers[i].biases.length;
       resizeKuramoto(kuramoto, newSize);
@@ -77,10 +100,15 @@ export function checkNeurogenesis(
       ngState.epochsAboveThreshold[i] >= EPOCHS_TO_TRIGGER &&
       layer.biases.length > MIN_NEURONS_PER_LAYER
     ) {
-      net.layers[i] = pruneLayer(layer);
+      const { newLayer, keptIndices } = pruneLayerWithIndices(layer);
+      net.layers[i] = newLayer;
       ngState.epochsAboveThreshold[i] = 0;
       ngState.pruneEvents++;
       pruned = true;
+
+      if (i + 1 < net.layers.length) {
+        pruneNextLayerInputs(net.layers[i + 1], keptIndices);
+      }
     }
   }
 

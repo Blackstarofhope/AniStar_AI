@@ -110,6 +110,19 @@ export function phaseModulatedEmbedding(
   });
 }
 
+export function alignVisionPhasesToEmbedding(
+  state: KuramotoState,
+  visionEmbedding: number[]
+): void {
+  const n = Math.min(state.visionPhases.length, visionEmbedding.length);
+  for (let i = 0; i < n; i++) {
+    const signal = visionEmbedding[i];
+    const targetPhase = Math.acos(Math.max(-1, Math.min(1, signal)));
+    const diff = targetPhase - state.visionPhases[i];
+    state.visionPhases[i] = (state.visionPhases[i] + 0.1 * diff + 2 * Math.PI) % (2 * Math.PI);
+  }
+}
+
 export function updateOrderHistory(state: KuramotoState): void {
   const R = synchronyIndex(state);
   state.orderHistory.push(R);

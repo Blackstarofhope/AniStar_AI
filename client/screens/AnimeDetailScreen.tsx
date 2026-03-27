@@ -92,7 +92,9 @@ function formatCountdown(targetDate: Date): string {
 }
 
 async function fetchAnimeDetail(id: number): Promise<AnimeDetail> {
-  const response = await fetch(`https://api.jikan.moe/v4/anime/${id}/full`);
+  const { getApiUrl } = await import("@/lib/query-client");
+  const url = new URL(`/api/anime/${id}`, getApiUrl());
+  const response = await fetch(url.toString());
   if (!response.ok) throw new Error("Failed to fetch anime details");
   const data = await response.json();
   return data.data;

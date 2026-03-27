@@ -231,21 +231,33 @@ export function growLayer(layer: FFLayer, inputSize: number): FFLayer {
 }
 
 export function pruneLayer(layer: FFLayer): FFLayer {
+  return pruneLayerWithIndices(layer).newLayer;
+}
+
+export function pruneLayerWithIndices(
+  layer: FFLayer
+): { newLayer: FFLayer; keptIndices: Set<number> } {
   const n = layer.biases.length;
   const pruneCount = Math.max(1, Math.floor(n * 0.1));
-  if (n - pruneCount < 8) return layer;
+  if (n - pruneCount < 8) {
+    const allIndices = new Set<number>(Array.from({ length: n }, (_, i) => i));
+    return { newLayer: layer, keptIndices: allIndices };
+  }
 
   const indexed = layer.activationSum.map((s, i) => ({ s, i }));
   indexed.sort((a, b) => a.s - b.s);
-  const keepIndices = new Set(indexed.slice(pruneCount).map((x) => x.i));
+  const keptIndices = new Set(indexed.slice(pruneCount).map((x) => x.i));
 
   return {
-    weights: layer.weights.filter((_, i) => keepIndices.has(i)),
-    biases: layer.biases.filter((_, i) => keepIndices.has(i)),
-    phases: layer.phases.filter((_, i) => keepIndices.has(i)),
-    goodnessWindow: [...layer.goodnessWindow],
-    activationSum: layer.activationSum.filter((_, i) => keepIndices.has(i)),
-    activationEntropyWindow: [...layer.activationEntropyWindow],
+    newLayer: {
+      weights: layer.weights.filter((_, i) => keptIndices.has(i)),
+      biases: layer.biases.filter((_, i) => keptIndices.has(i)),
+      phases: layer.phases.filter((_, i) => keptIndices.has(i)),
+      goodnessWindow: [...layer.goodnessWindow],
+      activationSum: layer.activationSum.filter((_, i) => keptIndices.has(i)),
+      activationEntropyWindow: [...layer.activationEntropyWindow],
+    },
+    keptIndices,
   };
 }
 

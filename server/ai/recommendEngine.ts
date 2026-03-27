@@ -5,7 +5,7 @@ import {
 import {
   createKuramotoSystem, stepKuramoto, synchronyIndex,
   updateCouplingFromGoodness, phaseModulatedEmbedding,
-  updateOrderHistory, type KuramotoState
+  alignVisionPhasesToEmbedding, updateOrderHistory, type KuramotoState
 } from "./kuramoto.js";
 import {
   createNeurogenesisState, checkNeurogenesis, syncNeurogenesisState,
@@ -168,6 +168,10 @@ export async function getRecommendations(limit = 10): Promise<Recommendation[]> 
       const artworkBoost = verification.verified ? 1.05 : 0.95;
       const finalConfidence = Math.min(1, Math.max(0, score * artworkBoost));
 
+      if (verification.visionEmbedding && verification.visionEmbedding.length > 0) {
+        alignVisionPhasesToEmbedding(eng.kuramoto, verification.visionEmbedding);
+      }
+
       recommendations.push({
         mal_id: anime.mal_id,
         title: anime.title,
@@ -249,7 +253,13 @@ export async function processFeedback(
     stepKuramoto(eng.kuramoto, 5);
 
     syncNeurogenesisState(eng.neurogenesis, eng.network.layers.length);
-    checkNeurogenesis(eng.network, eng.neurogenesis, eng.kuramoto);
+    const { grown, pruned } = checkNeurogenesis(eng.network, eng.neurogenesis, eng.kuramoto);
+
+    if (grown || pruned) {
+      if (eng.ratings.length >= 5) {
+        computeFisher(eng.ewc, eng.network, eng.ratings);
+      }
+    }
 
     const replayEntry: ReplayEntry = {
       animeId: malId,
