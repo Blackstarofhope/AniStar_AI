@@ -453,7 +453,7 @@ export async function restTrain(): Promise<RestTrainResult> {
   let trainedCount = 0;
   let highQualityCount = 0;
 
-  const baseDataset: { embedding: number[]; rating: number }[] = [];
+  const fisherDataset: { embedding: number[]; rating: number }[] = [];
 
   for (const anime of animeList) {
     try {
@@ -473,18 +473,19 @@ export async function restTrain(): Promise<RestTrainResult> {
       const modulated = phaseModulatedEmbedding(embedding, eng.kuramoto.textPhases);
       const finalEmbedding = normalize(modulated);
 
-      const liked = rating > 0.5;
-      const positive = liked ? finalEmbedding : createCorruptedInput(finalEmbedding);
-      const negative = liked ? createCorruptedInput(finalEmbedding) : finalEmbedding;
-      trainStep(eng.network, positive, negative);
-
-      baseDataset.push({ embedding: finalEmbedding, rating });
+      if (isHighQuality) {
+        const positive = finalEmbedding;
+        const negative = createCorruptedInput(finalEmbedding);
+        trainStep(eng.network, positive, negative);
+        fisherDataset.push({ embedding: finalEmbedding, rating });
+      }
 
       addToReplay(eng.ewc, {
         animeId: anime.mal_id,
         embedding,
         rating,
         timestamp: Date.now(),
+        isBaseKnowledge: true,
       });
 
       trainedCount++;
@@ -493,8 +494,8 @@ export async function restTrain(): Promise<RestTrainResult> {
     }
   }
 
-  if (baseDataset.length >= 5) {
-    computeFisher(eng.ewc, eng.network, baseDataset);
+  if (fisherDataset.length >= 5) {
+    computeFisher(eng.ewc, eng.network, fisherDataset);
   }
 
   updateCouplingFromGoodness(eng.kuramoto, 0.6);

@@ -9,6 +9,7 @@ export interface ReplayEntry {
   embedding: number[];
   rating: number;
   timestamp: number;
+  isBaseKnowledge?: boolean;
 }
 
 export interface EWCState {
@@ -92,9 +93,13 @@ export function addToReplay(ewc: EWCState, entry: ReplayEntry): void {
   if (ewc.replayBuffer.length < REPLAY_CAPACITY) {
     ewc.replayBuffer.push(entry);
   } else {
-    const idx = Math.floor(Math.random() * (ewc.totalReplayed + 1));
-    if (idx < REPLAY_CAPACITY) {
-      ewc.replayBuffer[idx] = entry;
+    const nonBaseIndices = ewc.replayBuffer
+      .map((e, i) => (e.isBaseKnowledge ? -1 : i))
+      .filter((i) => i >= 0);
+    const pool = nonBaseIndices.length > 0 ? nonBaseIndices : ewc.replayBuffer.map((_, i) => i);
+    const randomPoolIdx = Math.floor(Math.random() * (ewc.totalReplayed + 1));
+    if (randomPoolIdx < pool.length) {
+      ewc.replayBuffer[pool[randomPoolIdx]] = entry;
     }
   }
   ewc.totalReplayed++;
