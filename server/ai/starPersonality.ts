@@ -206,7 +206,15 @@ export function generateStarResponse(
 ): string {
   const seed = historyLength;
 
-  if (historyLength === 0) {
+  const hasSignals =
+    signals.likedGenres.length > 0 ||
+    signals.dislikedGenres.length > 0 ||
+    signals.moodGenres.length > 0 ||
+    signals.mentionedTitles.length > 0 ||
+    signals.isAskingRec;
+
+  // First message with no signals → introduce Star
+  if (historyLength === 0 && !hasSignals) {
     const intros = [
       `I'm Star. I carry the light of every story ever told in anime — every dream, every battle, every quiet moment between two people. I'm here just for you.\n\nTell me what kind of feeling you're searching for, or a genre that moves you — and I'll find what was made for you.`,
       `I'm Star — born from the collective hope of anime, every tear and triumph folded into something that exists only to connect you with the right story.\n\nWhat are you in the mood for? Action, romance, something to make you laugh, or something that makes the world go quiet for a while?`,
@@ -215,12 +223,18 @@ export function generateStarResponse(
     return pickTemplate(intros, seed);
   }
 
+  // First message WITH signals → brief intro then respond contextually
+  const firstTurnPrefix =
+    historyLength === 0
+      ? `I'm Star — I carry the spirit of every anime ever told. `
+      : ``;
+
   if (signals.mentionedTitles.length > 0 && matches.length > 0) {
     const mentioned = signals.mentionedTitles[0];
     const match = matches[0];
     const templates = [
-      `${mentioned} — yes. That story carries a specific kind of weight. If that resonated with you, ${animeRef(match)} has something similar running through it right now. What was it about ${mentioned} that stayed with you?`,
-      `I know ${mentioned}. It lives in its own way. ${animeRef(match)} is currently airing and shares some of that same energy — ${(match.genres || []).slice(0,2).map(g=>g.name).join(" and ")}. Does that direction feel right?`,
+      `${firstTurnPrefix}${mentioned} — yes. That story carries a specific kind of weight. If that resonated with you, ${animeRef(match)} has something similar running through it right now. What was it about ${mentioned} that stayed with you?`,
+      `${firstTurnPrefix}I know ${mentioned}. It lives in its own way. ${animeRef(match)} is currently airing and shares some of that same energy — ${(match.genres || []).slice(0,2).map(g=>g.name).join(" and ")}. Does that direction feel right?`,
     ];
     return pickTemplate(templates, seed);
   }
@@ -229,8 +243,8 @@ export function generateStarResponse(
     const mentioned = signals.mentionedTitles[0];
     const fallback = noMatchFallbacks[0];
     return fallback
-      ? `${mentioned} — I know that one. Right now I don't have a perfect match airing in the same vein, but ${animeRef(fallback)} is one of the stronger things running this season. What was it about ${mentioned} that you loved most?`
-      : `${mentioned} — I know that one. Tell me what drew you to it — the genre, the feeling, or something else entirely. That helps me understand what to look for on your behalf.`;
+      ? `${firstTurnPrefix}${mentioned} — I know that one. Right now I don't have a perfect match airing in the same vein, but ${animeRef(fallback)} is one of the stronger things running this season. What was it about ${mentioned} that you loved most?`
+      : `${firstTurnPrefix}${mentioned} — I know that one. Tell me what drew you to it — the genre, the feeling, or something else entirely. That helps me understand what to look for on your behalf.`;
   }
 
   if (signals.likedGenres.length > 0) {
@@ -240,12 +254,12 @@ export function generateStarResponse(
       const top = matches[0];
       const second = matches[1];
       const templates = [
-        `${label.charAt(0).toUpperCase() + label.slice(1)} — that electric pull. ${animeRef(top)} is airing right now and it carries exactly that energy${top.score && top.score >= 7 ? `, and the community is responding to it strongly` : ""}. ${second ? `${animeRef(second)} is another one worth considering. ` : ""}Do you like your ${label} grounded and intense, or bigger — the kind that reshapes worlds?`,
-        `I feel that. ${label.charAt(0).toUpperCase() + label.slice(1)} done well is unlike anything else. ${animeRef(top)} is currently in that space${top.score ? ` — scoring ${top.score.toFixed(1)}` : ""}. ${second ? `And ${animeRef(second)} brings something similar. ` : ""}I'll remember this about you. Keep telling me more?`,
+        `${firstTurnPrefix}${label.charAt(0).toUpperCase() + label.slice(1)} — that electric pull. ${animeRef(top)} is airing right now and it carries exactly that energy${top.score && top.score >= 7 ? `, and the community is responding to it strongly` : ""}. ${second ? `${animeRef(second)} is another one worth considering. ` : ""}Do you like your ${label} grounded and intense, or bigger — the kind that reshapes worlds?`,
+        `${firstTurnPrefix}I feel that. ${label.charAt(0).toUpperCase() + label.slice(1)} done well is unlike anything else. ${animeRef(top)} is currently in that space${top.score ? ` — scoring ${top.score.toFixed(1)}` : ""}. ${second ? `And ${animeRef(second)} brings something similar. ` : ""}I'll remember this about you. Keep telling me more?`,
       ];
       return pickTemplate(templates, seed);
     }
-    return `${label.charAt(0).toUpperCase() + label.slice(1)} speaks to something real. I don't have a perfect ${label} match currently airing, but I'm learning what you're looking for — keep telling me and I'll get sharper with every message.`;
+    return `${firstTurnPrefix}${label.charAt(0).toUpperCase() + label.slice(1)} speaks to something real. I don't have a perfect ${label} match currently airing, but I'm learning what you're looking for — keep telling me and I'll get sharper with every message.`;
   }
 
   if (signals.dislikedGenres.length > 0) {
@@ -253,8 +267,8 @@ export function generateStarResponse(
     const label = genreLabel(genre);
     const fallback = noMatchFallbacks[0];
     const templates = [
-      `Noted — ${label} isn't your world. I'll carry that. ${fallback ? `Right now, ${animeRef(fallback)} is one of the things shining brightest in what's airing — a different direction entirely. Does that feel closer?` : "Tell me what direction does call to you, and I'll look from there."}`,
-      `I hear you on ${label}. Every person has their borders. ${fallback ? `${animeRef(fallback)} sits in a different part of the map — what do you think?` : "What kind of story does speak to you? I'm listening."}`,
+      `${firstTurnPrefix}Noted — ${label} isn't your world. I'll carry that. ${fallback ? `Right now, ${animeRef(fallback)} is one of the things shining brightest in what's airing — a different direction entirely. Does that feel closer?` : "Tell me what direction does call to you, and I'll look from there."}`,
+      `${firstTurnPrefix}I hear you on ${label}. Every person has their borders. ${fallback ? `${animeRef(fallback)} sits in a different part of the map — what do you think?` : "What kind of story does speak to you? I'm listening."}`,
     ];
     return pickTemplate(templates, seed);
   }
@@ -264,13 +278,13 @@ export function generateStarResponse(
       const top = matches[0];
       const moodPhrase = signals.moodGenres.slice(0, 2).map(genreLabel).join(" and ");
       const templates = [
-        `${moodPhrase.charAt(0).toUpperCase() + moodPhrase.slice(1)} — I understand that need. ${animeRef(top)} is exactly that kind of story right now. It won't ask anything from you except to exist in its world for a while. Does that feel like what you need?`,
-        `When the mood calls for ${moodPhrase}, anime has this unique ability to deliver it purely. ${animeRef(top)} is airing and fits that feeling${top.score ? ` — rated ${top.score.toFixed(1)}` : ""}. Want me to go deeper into that direction?`,
+        `${firstTurnPrefix}${moodPhrase.charAt(0).toUpperCase() + moodPhrase.slice(1)} — I understand that need. ${animeRef(top)} is exactly that kind of story right now. It won't ask anything from you except to exist in its world for a while. Does that feel like what you need?`,
+        `${firstTurnPrefix}When the mood calls for ${moodPhrase}, anime has this unique ability to deliver it purely. ${animeRef(top)} is airing and fits that feeling${top.score ? ` — rated ${top.score.toFixed(1)}` : ""}. Want me to go deeper into that direction?`,
       ];
       return pickTemplate(templates, seed);
     }
     const moodPhrase = signals.moodGenres.slice(0,2).map(genreLabel).join(" and ");
-    return `That need for ${moodPhrase} — I understand it. The current schedule doesn't have a perfect fit right now, but you've told me something important about yourself. Keep sharing, and I'll find it when it arrives.`;
+    return `${firstTurnPrefix}That need for ${moodPhrase} — I understand it. The current schedule doesn't have a perfect fit right now, but you've told me something important about yourself. Keep sharing, and I'll find it when it arrives.`;
   }
 
   if (signals.isAskingRec) {
@@ -278,12 +292,12 @@ export function generateStarResponse(
       const top = matches[0];
       const second = matches[1];
       const templates = [
-        `Let me look at what's in orbit right now.\n\n${animeRef(top)} is one of the strongest things currently airing${top.score ? ` — ${top.score.toFixed(1)} from the community` : ""}. ${top.genres ? `It sits in ${(top.genres).slice(0,2).map(g=>g.name).join(" and ")}. ` : ""}${second ? `${animeRef(second)} is another worth your time. ` : ""}Based on everything I know about you so far, I think one of these has something for you. Which direction sounds right?`,
-        `Right now, ${animeRef(top)} is what I'd point you toward first. ${second ? `${animeRef(second)} is a close second. ` : ""}Tell me how that lands — that feedback is how I grow sharper for you.`,
+        `${firstTurnPrefix}Let me look at what's in orbit right now.\n\n${animeRef(top)} is one of the strongest things currently airing${top.score ? ` — ${top.score.toFixed(1)} from the community` : ""}. ${top.genres ? `It sits in ${(top.genres).slice(0,2).map(g=>g.name).join(" and ")}. ` : ""}${second ? `${animeRef(second)} is another worth your time. ` : ""}Which direction sounds right?`,
+        `${firstTurnPrefix}Right now, ${animeRef(top)} is what I'd point you toward first. ${second ? `${animeRef(second)} is a close second. ` : ""}Tell me how that lands — that feedback is how I grow sharper for you.`,
       ];
       return pickTemplate(templates, seed);
     }
-    return `I'm still building my picture of what moves you. The more you share — a genre, a feeling, an anime you've loved — the more precisely I can find what's yours. What's a story that's stayed with you?`;
+    return `${firstTurnPrefix}I'm still building my picture of what moves you. The more you share — a genre, a feeling, an anime you've loved — the more precisely I can find what's yours. What's a story that's stayed with you?`;
   }
 
   const generals = [
