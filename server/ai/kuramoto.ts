@@ -13,7 +13,7 @@ export function createKuramotoSystem(size: number): KuramotoState {
   return {
     textPhases: Array.from({ length: size }, () => Math.random() * TWO_PI),
     visionPhases: Array.from({ length: size }, () => Math.random() * TWO_PI),
-    naturalFrequencies: Array.from({ length: size }, () => (Math.random() - 0.5) * 2),
+    naturalFrequencies: Array.from({ length: size }, () => (Math.random() - 0.5) * 0.8),
     coupling: 0.5,
     orderHistory: [],
   };
@@ -92,7 +92,7 @@ export function synchronyIndex(state: KuramotoState): number {
 
 export function updateCouplingFromGoodness(state: KuramotoState, goodness: number): void {
   const target = 0.3 + goodness * 0.7;
-  state.coupling = state.coupling * 0.9 + target * 0.1;
+  state.coupling = state.coupling * 0.95 + target * 0.05;
   state.coupling = Math.max(0.1, Math.min(2.0, state.coupling));
 }
 
@@ -119,7 +119,7 @@ export function alignVisionPhasesToEmbedding(
     const signal = visionEmbedding[i];
     const targetPhase = Math.acos(Math.max(-1, Math.min(1, signal)));
     const diff = targetPhase - state.visionPhases[i];
-    state.visionPhases[i] = (state.visionPhases[i] + 0.1 * diff + 2 * Math.PI) % (2 * Math.PI);
+    state.visionPhases[i] = (state.visionPhases[i] + 0.05 * diff + 2 * Math.PI) % (2 * Math.PI);
   }
 }
 
