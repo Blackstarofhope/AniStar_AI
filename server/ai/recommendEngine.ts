@@ -473,12 +473,16 @@ export async function restTrain(): Promise<RestTrainResult> {
       const modulated = phaseModulatedEmbedding(embedding, eng.kuramoto.textPhases);
       const finalEmbedding = normalize(modulated);
 
+      // Neutral awareness pass: all catalog entries trained as positive (anime=valid)
+      trainStep(eng.network, finalEmbedding, createCorruptedInput(finalEmbedding));
+
+      // High-quality: second pass for stronger positive imprint
       if (isHighQuality) {
-        const positive = finalEmbedding;
-        const negative = createCorruptedInput(finalEmbedding);
-        trainStep(eng.network, positive, negative);
-        fisherDataset.push({ embedding: finalEmbedding, rating });
+        trainStep(eng.network, finalEmbedding, createCorruptedInput(finalEmbedding));
       }
+
+      // Fisher on full catalog — all base knowledge is class-1 (worthy of protection)
+      fisherDataset.push({ embedding: finalEmbedding, rating: 0.75 });
 
       addToReplay(eng.ewc, {
         animeId: anime.mal_id,
