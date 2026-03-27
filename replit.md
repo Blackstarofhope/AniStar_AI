@@ -36,6 +36,7 @@ Preferred communication style: Simple, everyday language.
 - Custom AnimeCard component with countdown timers that update every second
 - RecommendationCard component with confidence scores, artwork verification badges, and inline thumbs-up/down rating
 - AIStatusModal component showing live neural network metrics (goodness history sparkline, Kuramoto sync, EWC penalty, neurogenesis events)
+- StarChat component — conversational AI interface for Star, with message bubbles (Star left/user right), animated typing indicator, keyboard-aware input, and implicit model training on each send
 - Skeleton loaders for loading states
 - Error boundaries for graceful error handling
 

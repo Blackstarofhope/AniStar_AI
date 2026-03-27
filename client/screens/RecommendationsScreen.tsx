@@ -2,56 +2,28 @@ import React, { useState, useCallback } from "react";
 import {
   View,
   StyleSheet,
-  FlatList,
   Pressable,
-  ActivityIndicator,
-  RefreshControl,
+  ScrollView,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { useHeaderHeight } from "@react-navigation/elements";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { Ionicons } from "@expo/vector-icons";
-import { addDays, setHours, setMinutes, nextDay } from "date-fns";
+import { Image } from "expo-image";
+import { LinearGradient } from "expo-linear-gradient";
 
 import { ThemedText } from "@/components/ThemedText";
-import { RecommendationCard } from "@/components/RecommendationCard";
 import { AIStatusModal } from "@/components/AIStatusModal";
+import { StarChat } from "@/components/StarChat";
 import { Colors, Spacing, BorderRadius } from "@/constants/theme";
 import { getApiUrl } from "@/lib/query-client";
 import type { RecsStackParamList } from "@/navigation/types";
 
 type NavProp = NativeStackNavigationProp<RecsStackParamList, "Recommendations">;
 
-const DAY_MAP: { [key: string]: 0 | 1 | 2 | 3 | 4 | 5 | 6 } = {
-  Sundays: 0,
-  Mondays: 1,
-  Tuesdays: 2,
-  Wednesdays: 3,
-  Thursdays: 4,
-  Fridays: 5,
-  Saturdays: 6,
-};
-
-function getNextAiringDate(broadcast?: { day?: string; time?: string }): Date | null {
-  if (!broadcast?.day || !broadcast?.time) return null;
-  const dayOfWeek = DAY_MAP[broadcast.day];
-  if (dayOfWeek === undefined) return null;
-  const [hours, minutes] = broadcast.time.split(":").map(Number);
-  if (isNaN(hours) || isNaN(minutes)) return null;
-
-  const now = new Date();
-  const jstOffset = 9 * 60;
-  const localOffset = -now.getTimezoneOffset();
-  const offsetDiff = (jstOffset - localOffset) * 60 * 1000;
-
-  let nextBroadcast = nextDay(now, dayOfWeek);
-  nextBroadcast = setHours(nextBroadcast, hours);
-  nextBroadcast = setMinutes(nextBroadcast, minutes);
-  const local = new Date(nextBroadcast.getTime() - offsetDiff);
-
-  return local < now ? addDays(local, 7) : local;
-}
 
 interface Recommendation {
   mal_id: number;
@@ -67,11 +39,146 @@ interface Recommendation {
 }
 
 async function fetchRecommendations(): Promise<Recommendation[]> {
-  const url = new URL("/api/ai/recommend?limit=10", getApiUrl());
+  const url = new URL("/api/ai/recommend?limit=5", getApiUrl());
   const res = await fetch(url.toString());
   if (!res.ok) throw new Error("Failed to fetch recommendations");
-  const json = await res.json() as { recommendations: Recommendation[] };
+  const json = (await res.json()) as { recommendations: Recommendation[] };
   return json.recommendations || [];
+}
+
+function CompactRecCard({
+  item,
+  onPress,
+}: {
+  item: Recommendation;
+  onPress: () => void;
+}) {
+  const confidenceColor =
+    item.confidence > 0.75
+      ? Colors.dark.accent
+      : item.confidence > 0.5
+      ? Colors.dark.accentSecondary
+      : Colors.dark.neonPink;
+
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [compactStyles.card, pressed && { opacity: 0.85 }]}
+    >
+      <Image
+        source={{ uri: item.imageUrl }}
+        style={compactStyles.image}
+        contentFit="cover"
+        transition={300}
+      />
+      <LinearGradient
+        colors={["transparent", "rgba(15, 15, 18, 0.97)"]}
+        style={compactStyles.gradient}
+      />
+      <View style={compactStyles.confidenceBadge}>
+        <Ionicons name="sparkles" size={9} color={confidenceColor} />
+        <ThemedText style={[compactStyles.confidenceText, { color: confidenceColor }]}>
+          {Math.round(item.confidence * 100)}%
+        </ThemedText>
+      </View>
+      {item.artworkVerified ? (
+        <View style={compactStyles.verifiedBadge}>
+          <Ionicons name="checkmark-circle" size={12} color="#4ADE80" />
+        </View>
+      ) : null}
+      <View style={compactStyles.titleArea}>
+        <ThemedText style={compactStyles.title} numberOfLines={2}>
+          {item.title}
+        </ThemedText>
+        {item.score ? (
+          <View style={compactStyles.scoreRow}>
+            <Ionicons name="star" size={10} color={Colors.dark.accent} />
+            <ThemedText style={compactStyles.scoreText}>{item.score.toFixed(1)}</ThemedText>
+          </View>
+        ) : null}
+      </View>
+    </Pressable>
+  );
+}
+
+function RecStrip({
+  data,
+  isLoading,
+  isError,
+  isFetching,
+  onRefetch,
+  onCardPress,
+}: {
+  data: Recommendation[] | undefined;
+  isLoading: boolean;
+  isError: boolean;
+  isFetching: boolean;
+  onRefetch: () => void;
+  onCardPress: (item: Recommendation) => void;
+}) {
+  return (
+    <View style={stripStyles.container}>
+      <View style={stripStyles.labelRow}>
+        <Ionicons name="sparkles-outline" size={13} color={Colors.dark.accent} />
+        <ThemedText style={stripStyles.label}>Star&apos;s Top Picks</ThemedText>
+        <Pressable
+          onPress={onRefetch}
+          hitSlop={10}
+          style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+        >
+          <Ionicons
+            name="refresh-outline"
+            size={14}
+            color={isFetching ? Colors.dark.accent : Colors.dark.textSecondary}
+          />
+        </Pressable>
+      </View>
+
+      {isLoading ? (
+        <View style={stripStyles.loadingRow}>
+          {[0, 1, 2, 3, 4].map((i) => (
+            <View key={i} style={[compactStyles.card, compactStyles.skeleton]} />
+          ))}
+        </View>
+      ) : isError ? (
+        <View style={stripStyles.errorRow}>
+          <Ionicons name="warning-outline" size={16} color={Colors.dark.neonPink} />
+          <ThemedText style={stripStyles.errorText}>Picks unavailable</ThemedText>
+          <Pressable onPress={onRefetch} style={stripStyles.retryBtn}>
+            <ThemedText style={stripStyles.retryText}>Retry</ThemedText>
+          </Pressable>
+        </View>
+      ) : (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={stripStyles.scrollContent}
+        >
+          {(data || []).length === 0 ? (
+            <View style={stripStyles.emptyCard}>
+              <Ionicons
+                name="sparkles-outline"
+                size={24}
+                color={Colors.dark.accent}
+                style={{ opacity: 0.5 }}
+              />
+              <ThemedText style={stripStyles.emptyText}>
+                Chat with Star to get picks
+              </ThemedText>
+            </View>
+          ) : (
+            (data || []).map((item) => (
+              <CompactRecCard
+                key={item.mal_id}
+                item={item}
+                onPress={() => onCardPress(item)}
+              />
+            ))
+          )}
+        </ScrollView>
+      )}
+    </View>
+  );
 }
 
 export default function RecommendationsScreen() {
@@ -112,108 +219,25 @@ export default function RecommendationsScreen() {
     [navigation]
   );
 
-  const renderItem = useCallback(
-    ({ item }: { item: Recommendation }) => {
-      const airingDate = getNextAiringDate(item.broadcast);
-      return (
-        <RecommendationCard
-          malId={item.mal_id}
-          title={item.title}
-          imageUrl={item.imageUrl}
-          confidence={item.confidence}
-          artworkVerified={item.artworkVerified}
-          artworkScore={item.artworkScore}
-          genres={item.genres}
-          score={item.score}
-          episodes={item.episodes}
-          broadcast={item.broadcast}
-          nextAiringTime={airingDate}
-          onPress={() => handleCardPress(item)}
-        />
-      );
-    },
-    [handleCardPress]
-  );
-
-  const keyExtractor = useCallback((item: Recommendation) => String(item.mal_id), []);
-
   return (
-    <View style={styles.container}>
-      {isLoading ? (
-        <View style={[styles.centered, { paddingTop: headerHeight }]}>
-          <View style={styles.loadingCard}>
-            <ActivityIndicator size="large" color={Colors.dark.accent} />
-            <ThemedText style={styles.loadingTitle}>Neural Network Loading</ThemedText>
-            <ThemedText style={styles.loadingSubtitle}>
-              Synchronizing Kuramoto oscillators...
-            </ThemedText>
-          </View>
-        </View>
-      ) : isError ? (
-        <View style={[styles.centered, { paddingTop: headerHeight }]}>
-          <View style={styles.errorCard}>
-            <Ionicons name="warning-outline" size={40} color={Colors.dark.neonPink} />
-            <ThemedText style={styles.errorTitle}>Engine Offline</ThemedText>
-            <ThemedText style={styles.errorSubtitle}>
-              The AI server is not reachable. Make sure the dev server is running.
-            </ThemedText>
-            <Pressable onPress={() => refetch()} style={styles.retryButton}>
-              <Ionicons name="refresh-outline" size={16} color="#fff" />
-              <ThemedText style={styles.retryText}>Retry</ThemedText>
-            </Pressable>
-          </View>
-        </View>
-      ) : (
-        <FlatList
-          data={data || []}
-          keyExtractor={keyExtractor}
-          renderItem={renderItem}
-          contentContainerStyle={[
-            styles.listContent,
-            { paddingTop: headerHeight + Spacing.lg },
-          ]}
-          showsVerticalScrollIndicator={false}
-          ListHeaderComponent={<ListHeader />}
-          ListEmptyComponent={<EmptyState onRefetch={refetch} />}
-          refreshControl={
-            <RefreshControl
-              refreshing={isFetching && !isLoading}
-              onRefresh={refetch}
-              tintColor={Colors.dark.accent}
-            />
-          }
-        />
-      )}
+    <KeyboardAvoidingView
+      style={[styles.container, { paddingTop: headerHeight }]}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      keyboardVerticalOffset={headerHeight}
+    >
+      <RecStrip
+        data={data}
+        isLoading={isLoading}
+        isError={isError}
+        isFetching={isFetching}
+        onRefetch={refetch}
+        onCardPress={handleCardPress}
+      />
+
+      <StarChat />
 
       <AIStatusModal visible={statusVisible} onClose={() => setStatusVisible(false)} />
-    </View>
-  );
-}
-
-function ListHeader() {
-  return (
-    <View style={headerStyles.container}>
-      <Ionicons name="sparkles-outline" size={14} color={Colors.dark.accent} />
-      <ThemedText style={headerStyles.subtitle}>
-        Powered by Forward-Forward learning and Kuramoto coupling
-      </ThemedText>
-    </View>
-  );
-}
-
-function EmptyState({ onRefetch }: { onRefetch: () => void }) {
-  return (
-    <View style={emptyStyles.container}>
-      <Ionicons name="sparkles-outline" size={56} color={Colors.dark.accent} style={{ opacity: 0.5 }} />
-      <ThemedText style={emptyStyles.title}>Discovering Anime</ThemedText>
-      <ThemedText style={emptyStyles.subtitle}>
-        Rate some anime in the Schedule tab with thumbs up/down to teach the AI your taste.
-      </ThemedText>
-      <Pressable onPress={onRefetch} style={emptyStyles.button}>
-        <Ionicons name="refresh-outline" size={16} color={Colors.dark.accent} />
-        <ThemedText style={emptyStyles.buttonText}>Refresh</ThemedText>
-      </Pressable>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -222,121 +246,160 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.dark.backgroundRoot,
   },
-  centered: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    padding: Spacing.xl,
+});
+
+const stripStyles = StyleSheet.create({
+  container: {
+    backgroundColor: Colors.dark.backgroundRoot,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.dark.glassBorder,
+    paddingBottom: Spacing.sm,
   },
-  loadingCard: {
-    backgroundColor: Colors.dark.backgroundDefault,
-    borderRadius: BorderRadius.xl,
-    padding: Spacing["3xl"],
-    alignItems: "center",
-    gap: Spacing.lg,
-    borderWidth: 1,
-    borderColor: Colors.dark.glassBorder,
-    width: "100%",
-    maxWidth: 320,
-  },
-  loadingTitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: Colors.dark.text,
-  },
-  loadingSubtitle: {
-    fontSize: 13,
-    color: Colors.dark.textSecondary,
-    textAlign: "center",
-  },
-  errorCard: {
-    backgroundColor: Colors.dark.backgroundDefault,
-    borderRadius: BorderRadius.xl,
-    padding: Spacing["3xl"],
-    alignItems: "center",
-    gap: Spacing.lg,
-    borderWidth: 1,
-    borderColor: Colors.dark.glassBorder,
-    width: "100%",
-    maxWidth: 320,
-  },
-  errorTitle: {
-    fontSize: 17,
-    fontWeight: "700",
-    color: Colors.dark.neonPink,
-  },
-  errorSubtitle: {
-    fontSize: 13,
-    color: Colors.dark.textSecondary,
-    textAlign: "center",
-    lineHeight: 20,
-  },
-  retryButton: {
+  labelRow: {
     flexDirection: "row",
     alignItems: "center",
+    gap: Spacing.xs,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.sm,
+  },
+  label: {
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+    color: Colors.dark.accent,
+    flex: 1,
+  },
+  scrollContent: {
+    paddingHorizontal: Spacing.lg,
     gap: Spacing.sm,
-    backgroundColor: Colors.dark.accent,
-    paddingHorizontal: Spacing.xl,
+  },
+  loadingRow: {
+    flexDirection: "row",
+    paddingHorizontal: Spacing.lg,
+    gap: Spacing.sm,
+    paddingBottom: Spacing.sm,
+  },
+  errorRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
+    gap: Spacing.sm,
+  },
+  errorText: {
+    fontSize: 13,
+    color: Colors.dark.textSecondary,
+    flex: 1,
+  },
+  retryBtn: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    backgroundColor: Colors.dark.backgroundSecondary,
     borderRadius: BorderRadius.full,
+    borderWidth: 1,
+    borderColor: Colors.dark.glassBorder,
   },
   retryText: {
-    color: "#fff",
+    fontSize: 12,
+    color: Colors.dark.accent,
     fontWeight: "600",
-    fontSize: 14,
   },
-  listContent: {
-    paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing["4xl"],
-  },
-});
-
-const headerStyles = StyleSheet.create({
-  container: {
-    flexDirection: "row",
+  emptyCard: {
+    width: 200,
+    height: 180,
+    backgroundColor: Colors.dark.backgroundDefault,
+    borderRadius: BorderRadius.md,
+    borderWidth: 1,
+    borderColor: Colors.dark.glassBorder,
+    justifyContent: "center",
     alignItems: "center",
     gap: Spacing.sm,
-    marginBottom: Spacing.xl,
+    paddingHorizontal: Spacing.lg,
   },
-  subtitle: {
-    fontSize: 12,
-    color: Colors.dark.textSecondary,
-    lineHeight: 17,
-    flex: 1,
-  },
-});
-
-const emptyStyles = StyleSheet.create({
-  container: {
-    alignItems: "center",
-    paddingTop: Spacing["4xl"],
-    gap: Spacing.lg,
-    paddingHorizontal: Spacing.xl,
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: Colors.dark.text,
-  },
-  subtitle: {
-    fontSize: 14,
+  emptyText: {
+    fontSize: 13,
     color: Colors.dark.textSecondary,
     textAlign: "center",
-    lineHeight: 22,
+    lineHeight: 18,
   },
-  button: {
+});
+
+const compactStyles = StyleSheet.create({
+  card: {
+    width: 120,
+    height: 180,
+    borderRadius: BorderRadius.md,
+    overflow: "hidden",
+    backgroundColor: Colors.dark.backgroundDefault,
+    borderWidth: 1,
+    borderColor: Colors.dark.glassBorder,
+    position: "relative",
+  },
+  skeleton: {
+    backgroundColor: Colors.dark.backgroundSecondary,
+    borderColor: Colors.dark.glassBorder,
+    opacity: 0.7,
+  },
+  image: {
+    width: "100%",
+    height: "100%",
+  },
+  gradient: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: "65%",
+  },
+  confidenceBadge: {
+    position: "absolute",
+    top: Spacing.xs,
+    right: Spacing.xs,
     flexDirection: "row",
     alignItems: "center",
-    gap: Spacing.sm,
-    paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.md,
-    backgroundColor: Colors.dark.backgroundDefault,
+    backgroundColor: "rgba(15, 15, 18, 0.88)",
+    paddingHorizontal: Spacing.xs,
+    paddingVertical: 2,
     borderRadius: BorderRadius.full,
-    borderWidth: 1,
-    borderColor: Colors.dark.accent,
-    marginTop: Spacing.md,
+    gap: 3,
   },
-  buttonText: {
+  confidenceText: {
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  verifiedBadge: {
+    position: "absolute",
+    top: Spacing.xs,
+    left: Spacing.xs,
+    width: 20,
+    height: 20,
+    borderRadius: BorderRadius.full,
+    backgroundColor: "rgba(15, 15, 18, 0.88)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  titleArea: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    padding: Spacing.sm,
+    gap: 2,
+  },
+  title: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#fff",
+    lineHeight: 14,
+  },
+  scoreRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+  },
+  scoreText: {
+    fontSize: 10,
     color: Colors.dark.accent,
     fontWeight: "600",
   },
