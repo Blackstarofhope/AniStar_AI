@@ -15,6 +15,7 @@ export interface ModelState {
   ewc: EWCState;
   ratings: { animeId: number; embedding: number[]; rating: number; timestamp: number }[];
   allAnimeEmbeddings: { animeId: number; embedding: number[] }[];
+  restTrainedAt?: number;
   savedAt: string;
 }
 

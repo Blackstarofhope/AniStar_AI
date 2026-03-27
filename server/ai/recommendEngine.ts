@@ -65,6 +65,7 @@ interface EngineState {
   ratings: { animeId: number; embedding: number[]; rating: number; timestamp: number }[];
   allAnimeEmbeddings: { animeId: number; embedding: number[] }[];
   isTraining: boolean;
+  restTrainedAt: number | null;
 }
 
 let engine: EngineState | null = null;
@@ -81,6 +82,7 @@ function initEngine(): EngineState {
       ratings: saved.ratings || [],
       allAnimeEmbeddings: saved.allAnimeEmbeddings || [],
       isTraining: false,
+      restTrainedAt: saved.restTrainedAt ?? null,
     };
   }
 
@@ -92,6 +94,7 @@ function initEngine(): EngineState {
     ratings: [],
     allAnimeEmbeddings: [],
     isTraining: false,
+    restTrainedAt: null,
   };
 }
 
@@ -111,6 +114,7 @@ function persistEngine(eng: EngineState): void {
     ewc: eng.ewc,
     ratings: eng.ratings,
     allAnimeEmbeddings: eng.allAnimeEmbeddings,
+    restTrainedAt: eng.restTrainedAt ?? undefined,
     savedAt: new Date().toISOString(),
   };
   saveModelState(state);
@@ -402,4 +406,112 @@ export async function verifyAnimeArtwork(
 
 export function resetEngine(): void {
   engine = null;
+}
+
+export function getTopAnimeByGenres(
+  animeList: AnimeInfo[],
+  genres: string[],
+  limit = 3
+): AnimeInfo[] {
+  const filtered = genres.length > 0
+    ? animeList.filter((a) => a.genres?.some((g) => genres.includes(g.name)))
+    : animeList;
+  return filtered
+    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+    .slice(0, limit);
+}
+
+export function hasRestTrained(): boolean {
+  const eng = getEngine();
+  return eng.restTrainedAt !== null;
+}
+
+export interface RestTrainResult {
+  animeCount: number;
+  trainedCount: number;
+  highQualityCount: number;
+  elapsedMs: number;
+  epoch: number;
+}
+
+export async function restTrain(): Promise<RestTrainResult> {
+  const eng = getEngine();
+  const startMs = Date.now();
+
+  console.log("[Star] Starting rest training — building base knowledge...");
+
+  const animeList = await getAllCurrentAnime();
+  if (animeList.length === 0) {
+    return { animeCount: 0, trainedCount: 0, highQualityCount: 0, elapsedMs: Date.now() - startMs, epoch: eng.network.epoch };
+  }
+
+  const ctx = buildTFIDFContext(animeList as AnimeInfo[]);
+  const embeddingCache = new Map<number, number[]>(
+    eng.allAnimeEmbeddings.map((e) => [e.animeId, e.embedding])
+  );
+
+  let trainedCount = 0;
+  let highQualityCount = 0;
+
+  const baseDataset: { embedding: number[]; rating: number }[] = [];
+
+  for (const anime of animeList) {
+    try {
+      let embedding = embeddingCache.get(anime.mal_id);
+      if (!embedding) {
+        embedding = tfidfWeightWithContext(ctx, anime as AnimeInfo);
+        embeddingCache.set(anime.mal_id, embedding);
+        eng.allAnimeEmbeddings.push({ animeId: anime.mal_id, embedding });
+        if (eng.allAnimeEmbeddings.length > 2000) eng.allAnimeEmbeddings.shift();
+      }
+
+      const isHighQuality = (anime.score ?? 0) >= 7.5;
+      const rating = isHighQuality ? 0.75 : 0.5;
+
+      if (isHighQuality) highQualityCount++;
+
+      const modulated = phaseModulatedEmbedding(embedding, eng.kuramoto.textPhases);
+      const finalEmbedding = normalize(modulated);
+
+      const liked = rating > 0.5;
+      const positive = liked ? finalEmbedding : createCorruptedInput(finalEmbedding);
+      const negative = liked ? createCorruptedInput(finalEmbedding) : finalEmbedding;
+      trainStep(eng.network, positive, negative);
+
+      baseDataset.push({ embedding: finalEmbedding, rating });
+
+      addToReplay(eng.ewc, {
+        animeId: anime.mal_id,
+        embedding,
+        rating,
+        timestamp: Date.now(),
+      });
+
+      trainedCount++;
+    } catch {
+      continue;
+    }
+  }
+
+  if (baseDataset.length >= 5) {
+    computeFisher(eng.ewc, eng.network, baseDataset);
+  }
+
+  updateCouplingFromGoodness(eng.kuramoto, 0.6);
+  stepKuramoto(eng.kuramoto, 10);
+  updateOrderHistory(eng.kuramoto);
+
+  eng.restTrainedAt = Date.now();
+  persistEngine(eng);
+
+  const elapsed = Date.now() - startMs;
+  console.log(`[Star] Rest training complete: ${trainedCount} anime trained (${highQualityCount} high-quality) in ${elapsed}ms`);
+
+  return {
+    animeCount: animeList.length,
+    trainedCount,
+    highQualityCount,
+    elapsedMs: elapsed,
+    epoch: eng.network.epoch,
+  };
 }

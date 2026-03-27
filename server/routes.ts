@@ -1,10 +1,13 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
 import {
-  getRecommendations, processFeedback, getAIStatus, verifyAnimeArtwork
+  getRecommendations, processFeedback, getAIStatus, verifyAnimeArtwork,
+  restTrain, hasRestTrained
 } from "./ai/recommendEngine.js";
 import { getSchedule, getSeasonalAnime, getAnimeDetails } from "./ai/animeData.js";
 import { validateImageUrl } from "./ai/visionVerifier.js";
+import { processChat, STAR_NAME, STAR_BIO } from "./ai/starChat.js";
+import type { ChatMessage } from "./ai/starChat.js";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/anime/schedule", async (req: Request, res: Response) => {
@@ -41,7 +44,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/ai/recommend", async (req: Request, res: Response) => {
-    const limit = Math.min(25, parseInt((req.query.limit as string) || "10", 10));
+    const limit = Math.min(25, parseInt((req.query.limit as string) || "5", 10));
     try {
       const recommendations = await getRecommendations(limit, 12000);
       res.json({ recommendations });
@@ -98,6 +101,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.post("/api/ai/chat", async (req: Request, res: Response) => {
+    const { message, history } = req.body as {
+      message?: string;
+      history?: ChatMessage[];
+    };
+    if (typeof message !== "string" || message.trim().length === 0) {
+      return res.status(400).json({ error: "message is required" });
+    }
+    const safeHistory: ChatMessage[] = Array.isArray(history)
+      ? history.slice(-20).filter(
+          (m): m is ChatMessage =>
+            (m.role === "user" || m.role === "star") &&
+            typeof m.content === "string"
+        )
+      : [];
+    try {
+      const result = await processChat(message.trim(), safeHistory);
+      res.json(result);
+    } catch (e) {
+      console.error("[Star] Chat error:", e);
+      res.status(500).json({ error: "Star is unable to respond right now" });
+    }
+  });
+
+  app.get("/api/ai/star", (_req: Request, res: Response) => {
+    res.json({ name: STAR_NAME, bio: STAR_BIO, restTrained: hasRestTrained() });
+  });
+
+  app.post("/api/ai/rest-train", async (_req: Request, res: Response) => {
+    try {
+      const result = await restTrain();
+      res.json({ success: true, ...result });
+    } catch (e) {
+      console.error("[Star] Rest training error:", e);
+      res.status(500).json({ error: "Rest training failed" });
+    }
+  });
+
   const httpServer = createServer(app);
+
+  setTimeout(() => {
+    if (!hasRestTrained()) {
+      console.log("[Star] No prior rest training found — starting background base-knowledge pass...");
+      restTrain().catch((e) => console.error("[Star] Auto rest-train failed:", e));
+    }
+  }, 5000);
+
   return httpServer;
 }
