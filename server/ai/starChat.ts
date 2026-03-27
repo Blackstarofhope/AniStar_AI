@@ -46,7 +46,10 @@ export async function processChat(
   const historyLength = history.length;
   const response = generateStarResponse(signals, matches, noMatchFallbacks, historyLength);
 
-  const implicitFeedback = signals.likedGenres.length > 0 || signals.dislikedGenres.length > 0;
+  const implicitFeedback =
+    signals.likedGenres.length > 0 ||
+    signals.dislikedGenres.length > 0 ||
+    signals.moodGenres.length > 0;
 
   if (implicitFeedback) {
     setImmediate(() => {
@@ -62,6 +65,7 @@ async function applyImplicitFeedback(
   catalog: AnimeScheduleItem[]
 ): Promise<void> {
   const POSITIVE_RATING = 0.65;
+  const MOOD_RATING = 0.58;
   const NEGATIVE_RATING = 0.35;
 
   if (signals.likedGenres.length > 0) {
@@ -79,6 +83,17 @@ async function applyImplicitFeedback(
     for (const anime of matches) {
       try {
         await processFeedback(anime.mal_id, NEGATIVE_RATING);
+      } catch {
+      }
+    }
+  }
+
+  if (signals.moodGenres.length > 0) {
+    const moodOnly = signals.moodGenres.filter((g) => !signals.likedGenres.includes(g));
+    const matches = filterByGenres(catalog as AnimeInfo[], moodOnly, 2);
+    for (const anime of matches) {
+      try {
+        await processFeedback(anime.mal_id, MOOD_RATING);
       } catch {
       }
     }
