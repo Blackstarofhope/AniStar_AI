@@ -307,9 +307,28 @@ export function getAIStatus(): AIStatus {
 
 export async function verifyAnimeArtwork(
   malId: number,
-  imageUrl: string,
-  title?: string
+  imageUrlOverride?: string,
+  titleOverride?: string
 ): Promise<VerificationResult> {
+  let imageUrl = imageUrlOverride;
+  let title = titleOverride;
+
+  if (!imageUrl || !title) {
+    try {
+      const animeList = await getAllCurrentAnime();
+      const anime = animeList.find((a) => a.mal_id === malId);
+      if (anime) {
+        imageUrl = imageUrl || anime.images?.jpg?.large_image_url || "";
+        title = title || anime.title;
+      }
+    } catch {
+    }
+  }
+
+  if (!imageUrl) {
+    return { verified: false, score: 0, reason: "Could not resolve image URL for this anime" };
+  }
+
   return verifyArtwork(malId, imageUrl, title);
 }
 

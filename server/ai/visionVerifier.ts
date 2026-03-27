@@ -1,6 +1,7 @@
 import * as https from "https";
 import * as http from "http";
 import * as crypto from "crypto";
+import dns from "node:dns/promises";
 
 let Jimp: typeof import("jimp-compact") | null = null;
 async function getJimp() {
@@ -24,6 +25,47 @@ const cache = new Map<number, { result: VerificationResult; ts: number }>();
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const TIMEOUT_MS = 8000;
 const MAX_BYTES = 131072;
+
+const PRIVATE_IP_REGEX =
+  /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.0\.0\.0|::1|fc00:|fd[0-9a-f]{2}:)/i;
+
+const ALLOWED_IMAGE_HOSTS = new Set([
+  "cdn.myanimelist.net",
+  "img1.ak.crunchyroll.com",
+  "i.imgur.com",
+  "s4.anilist.co",
+  "media.kitsu.io",
+  "artworks.thetvdb.com",
+  "img.anili.st",
+  "myanimelist.net",
+]);
+
+export async function validateImageUrl(rawUrl: string): Promise<string | null> {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return "Invalid URL format";
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    return "Only http/https URLs are allowed";
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  if (!ALLOWED_IMAGE_HOSTS.has(hostname)) {
+    return `Host not in allowlist: ${hostname}`;
+  }
+  try {
+    const v4 = await dns.resolve4(hostname).catch(() => [] as string[]);
+    const v6 = await dns.resolve6(hostname).catch(() => [] as string[]);
+    for (const addr of [...v4, ...v6]) {
+      if (PRIVATE_IP_REGEX.test(addr)) {
+        return `Resolved to private/reserved IP: ${addr}`;
+      }
+    }
+  } catch {
+  }
+  return null;
+}
 
 function fetchImageBytes(url: string): Promise<{
   ok: boolean;
@@ -203,6 +245,17 @@ export async function verifyArtwork(
   let result: VerificationResult;
 
   try {
+    if (!imageUrl) {
+      return { verified: false, score: 0, reason: "No image URL provided" };
+    }
+
+    const ssrfError = await validateImageUrl(imageUrl);
+    if (ssrfError) {
+      result = { verified: false, score: 0, reason: `URL blocked: ${ssrfError}` };
+      cache.set(malId, { result, ts: Date.now() });
+      return result;
+    }
+
     const meta = await fetchImageBytes(imageUrl);
 
     if (!meta.ok) {
