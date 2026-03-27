@@ -214,26 +214,53 @@ async function getAniListEnrichment(
   }
 }
 
+function allDaysCached(): boolean {
+  const days = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"];
+  return days.every((d) => {
+    const cached = scheduleCache.get(d);
+    return cached && Date.now() - cached.timestamp < CACHE_TTL;
+  });
+}
+
 export async function getAllCurrentAnime(): Promise<AnimeScheduleItem[]> {
   const days = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"];
   const seen = new Set<number>();
   const result: AnimeScheduleItem[] = [];
 
-  const [seasonal, popular, ...dayResults] = await Promise.allSettled([
+  const [seasonal, popular] = await Promise.allSettled([
     getSeasonalAnime(),
     getPopularAiring(),
-    ...days.map((d) => getSchedule(d)),
   ]);
 
-  const allSources = [seasonal, popular, ...dayResults];
+  const isCached = allDaysCached();
+  const dayResults: AnimeScheduleItem[][] = [];
+  for (let i = 0; i < days.length; i++) {
+    if (i > 0 && !isCached) {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+    try {
+      dayResults.push(await getSchedule(days[i]));
+    } catch {
+      dayResults.push([]);
+    }
+  }
 
-  for (const r of allSources) {
+  for (const r of [seasonal, popular]) {
     if (r.status === "fulfilled") {
       for (const a of r.value) {
         if (!seen.has(a.mal_id) && !isKidsShow(a)) {
           seen.add(a.mal_id);
           result.push(a);
         }
+      }
+    }
+  }
+
+  for (const items of dayResults) {
+    for (const a of items) {
+      if (!seen.has(a.mal_id) && !isKidsShow(a)) {
+        seen.add(a.mal_id);
+        result.push(a);
       }
     }
   }

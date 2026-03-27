@@ -115,30 +115,46 @@ function persistEngine(eng: EngineState): void {
   saveModelState(state);
 }
 
-export async function getRecommendations(limit = 10): Promise<Recommendation[]> {
-  const eng = getEngine();
+function buildRecommendationItem(
+  anime: AnimeScheduleItem,
+  score: number,
+  verification: { verified: boolean; score: number; visionEmbedding: number[] }
+): Recommendation {
+  const imageUrl = anime.images?.jpg?.large_image_url || "";
+  const artworkBoost = verification.verified ? 1.05 : 0.95;
+  const finalConfidence = Math.min(1, Math.max(0, score * artworkBoost));
+  return {
+    mal_id: anime.mal_id,
+    title: anime.title,
+    imageUrl,
+    confidence: Math.round(finalConfidence * 100) / 100,
+    artworkVerified: verification.verified,
+    artworkScore: verification.score,
+    genres: (anime.genres || []).map((g) => g.name),
+    score: anime.score,
+    episodes: anime.episodes,
+    broadcast: anime.broadcast,
+  };
+}
 
-  const animeList = await getAllCurrentAnime();
-  if (animeList.length === 0) return [];
+const UNVERIFIED: { verified: boolean; score: number; visionEmbedding: number[] } = { verified: false, score: 0, visionEmbedding: [] };
 
-  const userPref = buildUserPreferenceVector(
-    eng.ratings.map((r) => ({ embedding: r.embedding, rating: r.rating }))
-  );
-
+function scoreAnimeList(
+  eng: ReturnType<typeof getEngine>,
+  animeList: AnimeScheduleItem[],
+  userPref: number[],
+  limit: number
+): { anime: AnimeScheduleItem; score: number; embedding: number[] }[] {
   const scored: { anime: AnimeScheduleItem; score: number; embedding: number[] }[] = [];
 
   for (const anime of animeList) {
     try {
       const embedding = tfidfWeight(animeList as AnimeInfo[], anime as AnimeInfo);
-
       const modulated = phaseModulatedEmbedding(embedding, eng.kuramoto.textPhases);
       const finalEmbedding = normalize(modulated);
-
       const ffScore = infer(eng.network, finalEmbedding);
       const cosSim = cosineSim(finalEmbedding, userPref);
-
       const combinedScore = 0.6 * Math.tanh(ffScore / 5) + 0.4 * (cosSim + 1) / 2;
-
       scored.push({ anime, score: combinedScore, embedding });
 
       const existingIdx = eng.allAnimeEmbeddings.findIndex((e) => e.animeId === anime.mal_id);
@@ -146,9 +162,7 @@ export async function getRecommendations(limit = 10): Promise<Recommendation[]> 
         eng.allAnimeEmbeddings[existingIdx].embedding = embedding;
       } else {
         eng.allAnimeEmbeddings.push({ animeId: anime.mal_id, embedding });
-        if (eng.allAnimeEmbeddings.length > 2000) {
-          eng.allAnimeEmbeddings.shift();
-        }
+        if (eng.allAnimeEmbeddings.length > 2000) eng.allAnimeEmbeddings.shift();
       }
     } catch {
       continue;
@@ -156,43 +170,90 @@ export async function getRecommendations(limit = 10): Promise<Recommendation[]> 
   }
 
   scored.sort((a, b) => b.score - a.score);
-  const topAnime = scored.slice(0, limit);
+  return scored.slice(0, limit);
+}
 
-  const recommendations: Recommendation[] = [];
+export async function getRecommendations(limit = 10, deadlineMs = 12000): Promise<Recommendation[]> {
+  const eng = getEngine();
+  const deadline = Date.now() + deadlineMs;
 
-  for (const { anime, score, embedding } of topAnime) {
-    try {
-      const imageUrl = anime.images?.jpg?.large_image_url || "";
-      const verification = await verifyArtwork(anime.mal_id, imageUrl, anime.title);
+  const partialResults: Recommendation[] = [];
 
-      const artworkBoost = verification.verified ? 1.05 : 0.95;
-      const finalConfidence = Math.min(1, Math.max(0, score * artworkBoost));
+  const coreWork = async (): Promise<Recommendation[]> => {
+    const animeList = await getAllCurrentAnime();
+    if (animeList.length === 0) return [];
 
-      if (verification.visionEmbedding && verification.visionEmbedding.length > 0) {
-        alignVisionPhasesToEmbedding(eng.kuramoto, verification.visionEmbedding);
-      }
+    const userPref = buildUserPreferenceVector(
+      eng.ratings.map((r) => ({ embedding: r.embedding, rating: r.rating }))
+    );
 
-      recommendations.push({
-        mal_id: anime.mal_id,
-        title: anime.title,
-        imageUrl,
-        confidence: Math.round(finalConfidence * 100) / 100,
-        artworkVerified: verification.verified,
-        artworkScore: verification.score,
-        genres: (anime.genres || []).map((g) => g.name),
-        score: anime.score,
-        episodes: anime.episodes,
-        broadcast: anime.broadcast,
-      });
-    } catch {
-      continue;
+    const topAnime = scoreAnimeList(eng, animeList, userPref, limit);
+
+    for (const { anime, score } of topAnime) {
+      partialResults.push(buildRecommendationItem(anime, score, UNVERIFIED));
     }
-  }
 
-  stepKuramoto(eng.kuramoto, 3);
-  updateOrderHistory(eng.kuramoto);
+    const verificationMap = new Map<number, { verified: boolean; score: number; visionEmbedding: number[] }>();
 
-  return recommendations;
+    const verificationPromises = topAnime.map(async ({ anime }) => {
+      try {
+        const v = await verifyArtwork(anime.mal_id, anime.images?.jpg?.large_image_url || "", anime.title);
+        verificationMap.set(anime.mal_id, v);
+        if (v.visionEmbedding && v.visionEmbedding.length > 0) {
+          alignVisionPhasesToEmbedding(eng.kuramoto, v.visionEmbedding);
+        }
+      } catch {
+        verificationMap.set(anime.mal_id, UNVERIFIED);
+      }
+    });
+
+    const verifyRemaining = deadline - Date.now();
+    if (verifyRemaining > 0) {
+      await Promise.race([
+        Promise.all(verificationPromises),
+        new Promise<void>((resolve) => setTimeout(resolve, verifyRemaining)),
+      ]);
+    }
+
+    const recommendations: Recommendation[] = [];
+    for (const { anime, score } of topAnime) {
+      try {
+        const verification = verificationMap.get(anime.mal_id) ?? UNVERIFIED;
+        recommendations.push(buildRecommendationItem(anime, score, verification));
+      } catch {
+        continue;
+      }
+    }
+
+    stepKuramoto(eng.kuramoto, 3);
+    updateOrderHistory(eng.kuramoto);
+
+    return recommendations;
+  };
+
+  let timerHandle: ReturnType<typeof setTimeout> | undefined;
+  let resolved = false;
+
+  const timeoutGuard = new Promise<Recommendation[]>((resolve) => {
+    const ms = deadline - Date.now();
+    timerHandle = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        stepKuramoto(eng.kuramoto, 3);
+        updateOrderHistory(eng.kuramoto);
+        resolve(partialResults);
+      }
+    }, Math.max(0, ms));
+  });
+
+  return Promise.race([
+    coreWork().then((result) => {
+      resolved = true;
+      if (timerHandle !== undefined) clearTimeout(timerHandle);
+      return result;
+    }),
+    timeoutGuard,
+  ]);
 }
 
 export async function processFeedback(

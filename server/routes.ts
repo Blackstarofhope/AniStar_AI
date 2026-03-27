@@ -43,7 +43,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/ai/recommend", async (req: Request, res: Response) => {
     const limit = Math.min(25, parseInt((req.query.limit as string) || "10", 10));
     try {
-      const recommendations = await getRecommendations(limit);
+      const recommendations = await getRecommendations(limit, 12000);
       res.json({ recommendations });
     } catch (e) {
       console.error("[AI] Recommendation error:", e);
