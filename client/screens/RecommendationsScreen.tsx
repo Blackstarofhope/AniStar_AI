@@ -119,9 +119,10 @@ function RecStrip({
 }) {
   return (
     <ScrollView
-      scrollEnabled={false}
       style={stripStyles.outerScroll}
       contentContainerStyle={stripStyles.container}
+      showsVerticalScrollIndicator={false}
+      bounces
       refreshControl={
         <RefreshControl
           refreshing={isFetching}
@@ -180,7 +181,7 @@ function RecStrip({
               </ThemedText>
             </View>
           ) : (
-            (data || []).map((item) => (
+            (data || []).slice(0, 5).map((item) => (
               <CompactRecCard
                 key={item.mal_id}
                 item={item}
