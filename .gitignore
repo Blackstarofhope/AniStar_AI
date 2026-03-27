@@ -41,3 +41,6 @@ app-example
 # generated native folders
 /ios
 /android
+
+# AI model state (runtime artifact, not source)
+ai-model-state.json

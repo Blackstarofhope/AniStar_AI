@@ -67,7 +67,7 @@ interface Recommendation {
 }
 
 async function fetchRecommendations(): Promise<Recommendation[]> {
-  const url = new URL("/api/ai/recommend?limit=15", getApiUrl());
+  const url = new URL("/api/ai/recommend?limit=10", getApiUrl());
   const res = await fetch(url.toString());
   if (!res.ok) throw new Error("Failed to fetch recommendations");
   const json = await res.json() as { recommendations: Recommendation[] };
