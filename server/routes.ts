@@ -1,9 +1,56 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
+import { URL } from "node:url";
+import dns from "node:dns/promises";
 import {
   getRecommendations, processFeedback, getAIStatus, verifyAnimeArtwork
 } from "./ai/recommendEngine.js";
 import { getSchedule, getSeasonalAnime, getAnimeDetails } from "./ai/animeData.js";
+
+const PRIVATE_IP_REGEX =
+  /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.0\.0\.0|::1|fc00:|fd[0-9a-f]{2}:)/i;
+
+const ALLOWED_IMAGE_HOSTS = new Set([
+  "cdn.myanimelist.net",
+  "img1.ak.crunchyroll.com",
+  "i.imgur.com",
+  "s4.anilist.co",
+  "media.kitsu.io",
+  "artworks.thetvdb.com",
+  "img.anili.st",
+]);
+
+async function validateImageUrl(rawUrl: string): Promise<string | null> {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return "Invalid URL format";
+  }
+
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    return "Only http and https URLs are allowed";
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+
+  if (!ALLOWED_IMAGE_HOSTS.has(hostname)) {
+    return `Host not in allowlist: ${hostname}`;
+  }
+
+  try {
+    const addresses = await dns.resolve4(hostname).catch(() => [] as string[]);
+    const v6addresses = await dns.resolve6(hostname).catch(() => [] as string[]);
+    for (const addr of [...addresses, ...v6addresses]) {
+      if (PRIVATE_IP_REGEX.test(addr)) {
+        return `Resolved to private/reserved IP: ${addr}`;
+      }
+    }
+  } catch {
+  }
+
+  return null;
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/anime/schedule", async (req: Request, res: Response) => {
@@ -82,6 +129,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     };
     if (typeof malId !== "number" || typeof imageUrl !== "string") {
       return res.status(400).json({ error: "malId and imageUrl are required" });
+    }
+    const urlError = await validateImageUrl(imageUrl);
+    if (urlError) {
+      return res.status(400).json({ error: `Invalid image URL: ${urlError}` });
     }
     try {
       const result = await verifyAnimeArtwork(malId, imageUrl, title);

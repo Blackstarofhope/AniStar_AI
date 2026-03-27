@@ -1,11 +1,11 @@
-import type { FFNetworkState, FFLayer } from "./forwardForward.js";
+import type { FFNetworkState } from "./forwardForward.js";
 import {
-  growLayer, pruneLayer, getLayerMeanGoodness, getTotalNeurons
+  growLayer, pruneLayer, getLayerActivationEntropy, getTotalNeurons
 } from "./forwardForward.js";
 import { resizeKuramoto, type KuramotoState } from "./kuramoto.js";
 
-const THETA_LOW = 0.15;
-const THETA_HIGH = 0.85;
+const ENTROPY_THRESHOLD_LOW = 0.2;
+const ENTROPY_THRESHOLD_HIGH = 0.85;
 const EPOCHS_TO_TRIGGER = 5;
 const MAX_NEURONS_PER_LAYER = 512;
 const MIN_NEURONS_PER_LAYER = 8;
@@ -44,13 +44,15 @@ export function checkNeurogenesis(
   const layerInputSizes = getLayerInputSizes(net);
 
   for (let i = 0; i < net.layers.length; i++) {
-    const meanG = getLayerMeanGoodness(net.layers[i]);
-    const normalized = Math.min(1, meanG / 10);
+    const layer = net.layers[i];
+    const entropy = getLayerActivationEntropy(layer);
+    const maxEntropy = Math.log(layer.biases.length + 1);
+    const normalizedEntropy = maxEntropy > 0 ? entropy / maxEntropy : 0.5;
 
-    if (normalized < THETA_LOW) {
+    if (normalizedEntropy < ENTROPY_THRESHOLD_LOW) {
       ngState.epochsBelowThreshold[i]++;
       ngState.epochsAboveThreshold[i] = 0;
-    } else if (normalized > THETA_HIGH) {
+    } else if (normalizedEntropy > ENTROPY_THRESHOLD_HIGH) {
       ngState.epochsAboveThreshold[i]++;
       ngState.epochsBelowThreshold[i] = 0;
     } else {
@@ -60,9 +62,9 @@ export function checkNeurogenesis(
 
     if (
       ngState.epochsBelowThreshold[i] >= EPOCHS_TO_TRIGGER &&
-      net.layers[i].biases.length < MAX_NEURONS_PER_LAYER
+      layer.biases.length < MAX_NEURONS_PER_LAYER
     ) {
-      net.layers[i] = growLayer(net.layers[i], layerInputSizes[i]);
+      net.layers[i] = growLayer(layer, layerInputSizes[i]);
       ngState.epochsBelowThreshold[i] = 0;
       ngState.growthEvents++;
       grown = true;
@@ -73,9 +75,9 @@ export function checkNeurogenesis(
 
     if (
       ngState.epochsAboveThreshold[i] >= EPOCHS_TO_TRIGGER &&
-      net.layers[i].biases.length > MIN_NEURONS_PER_LAYER
+      layer.biases.length > MIN_NEURONS_PER_LAYER
     ) {
-      net.layers[i] = pruneLayer(net.layers[i]);
+      net.layers[i] = pruneLayer(layer);
       ngState.epochsAboveThreshold[i] = 0;
       ngState.pruneEvents++;
       pruned = true;
@@ -87,12 +89,8 @@ export function checkNeurogenesis(
 
 function getLayerInputSizes(net: FFNetworkState): number[] {
   const sizes: number[] = [];
-  for (let i = 0; i < net.layers.length; i++) {
-    if (net.layers[i].weights.length > 0) {
-      sizes.push(net.layers[i].weights[0].length);
-    } else {
-      sizes.push(0);
-    }
+  for (const layer of net.layers) {
+    sizes.push(layer.weights.length > 0 ? layer.weights[0].length : 0);
   }
   return sizes;
 }

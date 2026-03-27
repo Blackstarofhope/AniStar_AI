@@ -1,5 +1,5 @@
 import {
-  createNetwork, trainStep, infer, getTotalNeurons, createCorruptedInput,
+  createNetwork, trainStep, applyEWCCorrection, infer, getTotalNeurons, createCorruptedInput,
   deserializeNetwork, serializeNetwork, type FFNetworkState
 } from "./forwardForward.js";
 import {
@@ -232,6 +232,16 @@ export async function processFeedback(
 
       const g = trainStep(eng.network, positive, negative);
       totalGoodness += g;
+
+      if (eng.ewc.fisher.length > 0) {
+        applyEWCCorrection(
+          eng.network,
+          eng.ewc.fisher,
+          eng.ewc.optimalWeights,
+          eng.ewc.optimalBiases,
+          80
+        );
+      }
     }
     const avgGoodness = totalGoodness / trainingBatch.length;
 

@@ -166,7 +166,7 @@ function ProgressBar({ value, max, color }: { value: number; max: number; color:
   const pct = Math.min(1, value / max);
   return (
     <View style={progressStyles.track}>
-      <View style={[progressStyles.fill, { width: `${pct * 100}%` as any, backgroundColor: color }]} />
+      <View style={[progressStyles.fill, { width: `${Math.round(pct * 100)}%` as `${number}%`, backgroundColor: color }]} />
     </View>
   );
 }

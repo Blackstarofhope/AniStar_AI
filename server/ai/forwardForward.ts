@@ -1,7 +1,7 @@
 import {
   kaiming, zerosVec, relu, layerNorm, normalize, sigmoid, goodness,
   matvec, addVec, scaleVec, outerProduct, addMatrix, scaleMatrix,
-  cloneMatrix, cloneVec, randn, zeros
+  cloneVec, randn
 } from "./matrix.js";
 
 export interface FFLayer {
@@ -10,6 +10,7 @@ export interface FFLayer {
   phases: number[];
   goodnessWindow: number[];
   activationSum: number[];
+  activationEntropyWindow: number[];
 }
 
 export interface FFNetworkState {
@@ -31,6 +32,7 @@ export function createLayer(inputSize: number, outputSize: number): FFLayer {
     phases: Array.from({ length: outputSize }, () => Math.random() * 2 * Math.PI),
     goodnessWindow: [],
     activationSum: zerosVec(outputSize),
+    activationEntropyWindow: [],
   };
 }
 
@@ -56,6 +58,16 @@ function computeActivations(layer: FFLayer, input: number[]): { h: number[]; nor
   return { h, normedInput };
 }
 
+function computeActivationEntropy(h: number[]): number {
+  const sq = h.map((x) => x * x);
+  const total = sq.reduce((s, v) => s + v, 0) + 1e-8;
+  const probs = sq.map((v) => v / total);
+  return -probs.reduce((s, p) => {
+    if (p <= 0) return s;
+    return s + p * Math.log(p + 1e-8);
+  }, 0);
+}
+
 function trainLayerStep(
   layer: FFLayer,
   input: number[],
@@ -78,6 +90,12 @@ function trainLayerStep(
 
   for (let i = 0; i < h.length; i++) {
     layer.activationSum[i] += h[i];
+  }
+
+  const entropy = computeActivationEntropy(h);
+  layer.activationEntropyWindow.push(entropy);
+  if (layer.activationEntropyWindow.length > WINDOW_SIZE) {
+    layer.activationEntropyWindow.shift();
   }
 
   return g;
@@ -118,6 +136,38 @@ export function trainStep(
   return normalizedG;
 }
 
+export function applyEWCCorrection(
+  net: FFNetworkState,
+  fisher: number[][][],
+  optimalWeights: number[][][],
+  optimalBiases: number[][],
+  lambda: number
+): void {
+  if (fisher.length === 0) return;
+  const lr = net.learningRate;
+
+  for (let li = 0; li < Math.min(net.layers.length, fisher.length); li++) {
+    const layer = net.layers[li];
+    const F = fisher[li];
+    const Wstar = optimalWeights[li];
+    const bstar = optimalBiases[li];
+    if (!F || !Wstar) continue;
+
+    for (let i = 0; i < Math.min(layer.weights.length, F.length, Wstar.length); i++) {
+      for (let j = 0; j < Math.min(layer.weights[i].length, F[i]?.length ?? 0, Wstar[i]?.length ?? 0); j++) {
+        const correction = lambda * F[i][j] * (layer.weights[i][j] - Wstar[i][j]);
+        layer.weights[i][j] -= lr * correction;
+      }
+    }
+
+    for (let i = 0; i < Math.min(layer.biases.length, bstar?.length ?? 0); i++) {
+      const Fb = F[i]?.[0] ?? 0;
+      const correction = lambda * Fb * (layer.biases[i] - bstar[i]);
+      layer.biases[i] -= lr * correction;
+    }
+  }
+}
+
 export function infer(net: FFNetworkState, input: number[]): number {
   let totalGoodness = 0;
   let current = input;
@@ -145,6 +195,11 @@ export function getLayerMeanGoodness(layer: FFLayer): number {
   return layer.goodnessWindow.reduce((s, g) => s + g, 0) / layer.goodnessWindow.length;
 }
 
+export function getLayerActivationEntropy(layer: FFLayer): number {
+  if (layer.activationEntropyWindow.length === 0) return Math.log(layer.biases.length || 1);
+  return layer.activationEntropyWindow.reduce((s, e) => s + e, 0) / layer.activationEntropyWindow.length;
+}
+
 export function createCorruptedInput(input: number[]): number[] {
   const corrupted = [...input];
   const numFlip = Math.max(1, Math.floor(corrupted.length * 0.3));
@@ -159,7 +214,7 @@ export function growLayer(layer: FFLayer, inputSize: number): FFLayer {
   const oldSize = layer.biases.length;
   const newNeurons = Math.max(1, Math.floor(oldSize * 0.2));
   const newSize = oldSize + newNeurons;
-  const std = Math.sqrt(2 / inputSize);
+  const std = Math.sqrt(2 / (inputSize || 1));
 
   const newWeights = Array.from({ length: newNeurons }, () =>
     Array.from({ length: inputSize }, () => randn() * std)
@@ -171,6 +226,7 @@ export function growLayer(layer: FFLayer, inputSize: number): FFLayer {
     phases: [...layer.phases, ...Array.from({ length: newNeurons }, () => Math.random() * 2 * Math.PI)],
     goodnessWindow: [...layer.goodnessWindow],
     activationSum: [...layer.activationSum, ...zerosVec(newNeurons)],
+    activationEntropyWindow: [...layer.activationEntropyWindow],
   };
 }
 
@@ -189,6 +245,7 @@ export function pruneLayer(layer: FFLayer): FFLayer {
     phases: layer.phases.filter((_, i) => keepIndices.has(i)),
     goodnessWindow: [...layer.goodnessWindow],
     activationSum: layer.activationSum.filter((_, i) => keepIndices.has(i)),
+    activationEntropyWindow: [...layer.activationEntropyWindow],
   };
 }
 
@@ -201,5 +258,13 @@ export function serializeNetwork(net: FFNetworkState): object {
 }
 
 export function deserializeNetwork(data: unknown): FFNetworkState {
-  return data as FFNetworkState;
+  const d = data as FFNetworkState;
+  if (d.layers) {
+    for (const layer of d.layers) {
+      if (!layer.activationEntropyWindow) {
+        layer.activationEntropyWindow = [];
+      }
+    }
+  }
+  return d;
 }

@@ -82,9 +82,9 @@ function getNextAiringDate(broadcast?: { day?: string; time?: string }): Date | 
 }
 
 async function fetchAnimeSchedule(day: string): Promise<AnimeItem[]> {
-  const response = await fetch(
-    `https://api.jikan.moe/v4/schedules?filter=${day}&sfw=true&page=1`
-  );
+  const { getApiUrl } = await import("@/lib/query-client");
+  const url = new URL(`/api/anime/schedule?day=${encodeURIComponent(day)}`, getApiUrl());
+  const response = await fetch(url.toString());
 
   if (!response.ok) {
     throw new Error("Failed to summon anime data");
