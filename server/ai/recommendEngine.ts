@@ -16,7 +16,8 @@ import {
   getReplayStats, type EWCState, type ReplayEntry
 } from "./ewc.js";
 import {
-  embedAnime, buildUserPreferenceVector, tfidfWeight, EMBEDDING_DIM,
+  embedAnime, buildUserPreferenceVector, tfidfWeight,
+  buildTFIDFContext, tfidfWeightWithContext, EMBEDDING_DIM,
   type AnimeInfo
 } from "./textEmbedder.js";
 import { verifyArtwork, type VerificationResult } from "./visionVerifier.js";
@@ -147,23 +148,28 @@ function scoreAnimeList(
 ): { anime: AnimeScheduleItem; score: number; embedding: number[] }[] {
   const scored: { anime: AnimeScheduleItem; score: number; embedding: number[] }[] = [];
 
+  const embeddingCache = new Map<number, number[]>(
+    eng.allAnimeEmbeddings.map((e) => [e.animeId, e.embedding])
+  );
+
+  const ctx = buildTFIDFContext(animeList as AnimeInfo[]);
+
   for (const anime of animeList) {
     try {
-      const embedding = tfidfWeight(animeList as AnimeInfo[], anime as AnimeInfo);
+      let embedding = embeddingCache.get(anime.mal_id);
+      if (!embedding) {
+        embedding = tfidfWeightWithContext(ctx, anime as AnimeInfo);
+        embeddingCache.set(anime.mal_id, embedding);
+        eng.allAnimeEmbeddings.push({ animeId: anime.mal_id, embedding });
+        if (eng.allAnimeEmbeddings.length > 2000) eng.allAnimeEmbeddings.shift();
+      }
+
       const modulated = phaseModulatedEmbedding(embedding, eng.kuramoto.textPhases);
       const finalEmbedding = normalize(modulated);
       const ffScore = infer(eng.network, finalEmbedding);
       const cosSim = cosineSim(finalEmbedding, userPref);
       const combinedScore = 0.6 * Math.tanh(ffScore / 5) + 0.4 * (cosSim + 1) / 2;
       scored.push({ anime, score: combinedScore, embedding });
-
-      const existingIdx = eng.allAnimeEmbeddings.findIndex((e) => e.animeId === anime.mal_id);
-      if (existingIdx >= 0) {
-        eng.allAnimeEmbeddings[existingIdx].embedding = embedding;
-      } else {
-        eng.allAnimeEmbeddings.push({ animeId: anime.mal_id, embedding });
-        if (eng.allAnimeEmbeddings.length > 2000) eng.allAnimeEmbeddings.shift();
-      }
     } catch {
       continue;
     }
@@ -198,7 +204,7 @@ export async function getRecommendations(limit = 10, deadlineMs = 12000): Promis
     const verificationPromises = topAnime.map(async ({ anime }) => {
       try {
         const v = await verifyArtwork(anime.mal_id, anime.images?.jpg?.large_image_url || "", anime.title);
-        verificationMap.set(anime.mal_id, v);
+        verificationMap.set(anime.mal_id, { ...v, visionEmbedding: v.visionEmbedding ?? [] });
         if (v.visionEmbedding && v.visionEmbedding.length > 0) {
           alignVisionPhasesToEmbedding(eng.kuramoto, v.visionEmbedding);
         }

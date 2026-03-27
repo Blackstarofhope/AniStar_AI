@@ -31,6 +31,124 @@ export interface AnimeInfo {
   rating?: string;
 }
 
+const SYNOPSIS_STOP_WORDS = new Set([
+  "a","an","the","and","or","but","in","on","at","to","for","of","with",
+  "is","are","was","were","be","been","being","have","has","had","do","does",
+  "did","will","would","could","should","may","might","can","that","this",
+  "it","its","he","she","they","we","i","you","his","her","their","our",
+  "by","from","up","as","if","then","than","so","no","not","all","also",
+  "into","about","after","when","who","which","what","where","how","one",
+  "two","three","young","while","new","old","must","find","own","set","gets",
+  "year","day","life","takes","called","after","becomes","begins","meets",
+  "there","however","even","through"
+]);
+
+function synopsisTokens(synopsis: string): string[] {
+  return synopsis
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((t) => t.length > 3 && !SYNOPSIS_STOP_WORDS.has(t));
+}
+
+function hashMod(token: string, buckets: number): number {
+  let h = 5381;
+  for (let i = 0; i < token.length; i++) {
+    h = ((h << 5) + h) ^ token.charCodeAt(i);
+    h = h >>> 0;
+  }
+  return h % buckets;
+}
+
+export interface TFIDFContext {
+  genreDocFreq: Record<string, number>;
+  synopsisDocFreq: Record<string, number>;
+  N: number;
+}
+
+export function buildTFIDFContext(animeList: AnimeInfo[]): TFIDFContext {
+  const genreDocFreq: Record<string, number> = {};
+  const synopsisDocFreq: Record<string, number> = {};
+  const N = animeList.length;
+
+  for (const anime of animeList) {
+    const genres = new Set((anime.genres || []).map((g) => g.name));
+    for (const g of genres) {
+      genreDocFreq[g] = (genreDocFreq[g] || 0) + 1;
+    }
+
+    if (anime.synopsis && anime.synopsis.length >= 10) {
+      const unique = new Set(synopsisTokens(anime.synopsis));
+      for (const t of unique) {
+        synopsisDocFreq[t] = (synopsisDocFreq[t] || 0) + 1;
+      }
+    }
+  }
+
+  return { genreDocFreq, synopsisDocFreq, N };
+}
+
+export function tfidfWeightWithContext(
+  ctx: TFIDFContext,
+  targetAnime: AnimeInfo
+): number[] {
+  const { genreDocFreq, synopsisDocFreq, N } = ctx;
+  const vec = new Array(EMBEDDING_DIM).fill(0);
+
+  const targetGenres = (targetAnime.genres || []).map((g) => g.name);
+  for (const genreName of targetGenres) {
+    const idx = GENRES.findIndex(
+      (g) => g.toLowerCase() === genreName.toLowerCase()
+    );
+    if (idx >= 0) {
+      const df = genreDocFreq[genreName] || 1;
+      const idf = Math.log((N + 1) / df + 1);
+      vec[idx] = idf;
+    }
+  }
+
+  const scoreDim = GENRES.length;
+  vec[scoreDim] = targetAnime.score ? Math.min(10, targetAnime.score) / 10 : 0.5;
+
+  const epsDim = GENRES.length + 1;
+  if (targetAnime.episodes && targetAnime.episodes > 0) {
+    vec[epsDim] = Math.min(1, 1 / Math.log1p(targetAnime.episodes));
+  } else {
+    vec[epsDim] = 0.5;
+  }
+
+  const studioOffset = GENRES.length + 2;
+  const animeStudios = (targetAnime.studios || []).map((s) => s.name);
+  for (const studioName of animeStudios) {
+    const idx = TOP_STUDIOS.findIndex(
+      (s) => s.toLowerCase() === studioName.toLowerCase()
+    );
+    if (idx >= 0) {
+      vec[studioOffset + idx] = 1;
+    }
+  }
+
+  if (targetAnime.synopsis && targetAnime.synopsis.length >= 10) {
+    const targetTokens = synopsisTokens(targetAnime.synopsis);
+    const tf: Record<string, number> = {};
+    for (const t of targetTokens) {
+      tf[t] = (tf[t] || 0) + 1;
+    }
+    const totalTokens = targetTokens.length || 1;
+
+    for (const [token, count] of Object.entries(tf)) {
+      const termFreq = count / totalTokens;
+      const df = synopsisDocFreq[token] || 1;
+      const idf = Math.log((N + 1) / df + 1);
+      const tfidfVal = termFreq * idf;
+      const bucketIdx = hashMod(token, GENRES.length);
+      vec[bucketIdx] += tfidfVal;
+    }
+  }
+
+  return normalize(vec);
+}
+
 export function embedAnime(anime: AnimeInfo): number[] {
   const vec: number[] = new Array(EMBEDDING_DIM).fill(0);
 
@@ -95,121 +213,11 @@ export function buildUserPreferenceVector(
   return normalize(pref);
 }
 
-const SYNOPSIS_STOP_WORDS = new Set([
-  "a","an","the","and","or","but","in","on","at","to","for","of","with",
-  "is","are","was","were","be","been","being","have","has","had","do","does",
-  "did","will","would","could","should","may","might","can","that","this",
-  "it","its","he","she","they","we","i","you","his","her","their","our",
-  "by","from","up","as","if","then","than","so","no","not","all","also",
-  "into","about","after","when","who","which","what","where","how","one",
-  "two","three","young","while","new","old","must","find","own","set","gets",
-  "year","day","life","takes","called","after","becomes","begins","meets",
-  "there","however","even","through"
-]);
-
-function synopsisTokens(synopsis: string): string[] {
-  return synopsis
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .filter((t) => t.length > 3 && !SYNOPSIS_STOP_WORDS.has(t));
-}
-
-function hashMod(token: string, buckets: number): number {
-  let h = 5381;
-  for (let i = 0; i < token.length; i++) {
-    h = ((h << 5) + h) ^ token.charCodeAt(i);
-    h = h >>> 0;
-  }
-  return h % buckets;
-}
-
-function synopsisTFIDFOverlay(
-  animeList: AnimeInfo[],
-  targetAnime: AnimeInfo,
-  vec: number[],
-  vocabSize: number
-): void {
-  if (!targetAnime.synopsis || targetAnime.synopsis.length < 10) return;
-
-  const docFreq: Record<string, number> = {};
-  for (const anime of animeList) {
-    if (!anime.synopsis) continue;
-    const unique = new Set(synopsisTokens(anime.synopsis));
-    for (const t of unique) {
-      docFreq[t] = (docFreq[t] || 0) + 1;
-    }
-  }
-
-  const N = Math.max(animeList.length, 1);
-  const targetTokens = synopsisTokens(targetAnime.synopsis);
-  const tf: Record<string, number> = {};
-  for (const t of targetTokens) {
-    tf[t] = (tf[t] || 0) + 1;
-  }
-  const totalTokens = targetTokens.length || 1;
-
-  for (const [token, count] of Object.entries(tf)) {
-    const termFreq = count / totalTokens;
-    const df = docFreq[token] || 1;
-    const idf = Math.log((N + 1) / df + 1);
-    const tfidf = termFreq * idf;
-    const bucketIdx = hashMod(token, vocabSize);
-    vec[bucketIdx] += tfidf;
-  }
-}
-
 export function tfidfWeight(
   animeList: AnimeInfo[],
   targetAnime: AnimeInfo
 ): number[] {
   if (animeList.length === 0) return embedAnime(targetAnime);
-
-  const df: Record<string, number> = {};
-  for (const anime of animeList) {
-    const genres = new Set((anime.genres || []).map((g) => g.name));
-    for (const g of genres) {
-      df[g] = (df[g] || 0) + 1;
-    }
-  }
-
-  const N = animeList.length;
-  const vec = new Array(EMBEDDING_DIM).fill(0);
-  const targetGenres = (targetAnime.genres || []).map((g) => g.name);
-
-  for (const genreName of targetGenres) {
-    const idx = GENRES.findIndex(
-      (g) => g.toLowerCase() === genreName.toLowerCase()
-    );
-    if (idx >= 0) {
-      const docFreq = df[genreName] || 1;
-      const idf = Math.log((N + 1) / docFreq + 1);
-      vec[idx] = idf;
-    }
-  }
-
-  const scoreDim = GENRES.length;
-  vec[scoreDim] = targetAnime.score ? Math.min(10, targetAnime.score) / 10 : 0.5;
-
-  const epsDim = GENRES.length + 1;
-  if (targetAnime.episodes && targetAnime.episodes > 0) {
-    vec[epsDim] = Math.min(1, 1 / Math.log1p(targetAnime.episodes));
-  } else {
-    vec[epsDim] = 0.5;
-  }
-
-  const studioOffset = GENRES.length + 2;
-  const animeStudios = (targetAnime.studios || []).map((s) => s.name);
-  for (const studioName of animeStudios) {
-    const idx = TOP_STUDIOS.findIndex(
-      (s) => s.toLowerCase() === studioName.toLowerCase()
-    );
-    if (idx >= 0) {
-      vec[studioOffset + idx] = 1;
-    }
-  }
-
-  synopsisTFIDFOverlay(animeList, targetAnime, vec, GENRES.length);
-
-  return normalize(vec);
+  const ctx = buildTFIDFContext(animeList);
+  return tfidfWeightWithContext(ctx, targetAnime);
 }
