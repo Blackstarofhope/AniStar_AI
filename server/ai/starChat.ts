@@ -1,3 +1,4 @@
+import * as https from "https";
 import { getAllCurrentAnime, type AnimeScheduleItem } from "./animeData.js";
 import {
   extractChatSignals, generateStarResponse, filterByGenres,
@@ -32,6 +33,107 @@ export interface ChatResponse {
 }
 
 export { STAR_NAME, STAR_BIO };
+
+// ---------------------------------------------------------------------------
+// Gemini API integration
+// ---------------------------------------------------------------------------
+
+const GEMINI_MODEL = "gemini-2.0-flash";
+const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+
+function httpsPost(url: string, apiKey: string, body: object): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body);
+    const parsed = new URL(url);
+    const options = {
+      hostname: parsed.hostname,
+      path: parsed.pathname + parsed.search,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+        "Content-Length": Buffer.byteLength(payload),
+      },
+    };
+    const req = https.request(options, (res) => {
+      let data = "";
+      res.on("data", (chunk) => { data += chunk; });
+      res.on("end", () => {
+        if ((res.statusCode ?? 0) >= 400) {
+          reject(new Error(`Gemini HTTP ${res.statusCode}: ${data.slice(0, 200)}`));
+        } else {
+          resolve(data);
+        }
+      });
+    });
+    req.on("error", reject);
+    req.setTimeout(10000, () => { req.destroy(new Error("Gemini request timed out")); });
+    req.write(payload);
+    req.end();
+  });
+}
+
+async function callGemini(
+  userMessage: string,
+  signals: ChatSignals,
+  matches: AnimeInfo[],
+  history: ChatMessage[]
+): Promise<string | null> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+
+  const likedStr = signals.likedGenres.length > 0
+    ? `Liked genres: ${signals.likedGenres.join(", ")}.` : "";
+  const dislikedStr = signals.dislikedGenres.length > 0
+    ? `Disliked genres: ${signals.dislikedGenres.join(", ")}.` : "";
+  const moodStr = signals.moodGenres.length > 0
+    ? `Mood-matched genres: ${signals.moodGenres.join(", ")}.` : "";
+
+  const matchLines = matches.slice(0, 4).map((a) => {
+    const genres = (a.genres || []).map((g) => g.name).join(", ");
+    return `- ${a.title} (score: ${a.score ?? "N/A"}, genres: ${genres || "N/A"})`;
+  }).join("\n");
+
+  const systemPrompt = [
+    `You are ${STAR_NAME}, an AI anime guide. ${STAR_BIO}`,
+    `Respond in character as Star. Keep responses conversational and under 150 words.`,
+    `If the user mentions an anime not in the provided catalog, acknowledge it and discuss it using your own knowledge. Suggest similar anime.`,
+    likedStr, dislikedStr, moodStr,
+    matchLines ? `Current catalog matches:\n${matchLines}` : "",
+  ].filter(Boolean).join("\n");
+
+  const contents = [
+    ...history.slice(-6).map((m) => ({
+      role: m.role === "star" ? "model" : "user",
+      parts: [{ text: m.content }],
+    })),
+    { role: "user", parts: [{ text: userMessage }] },
+  ];
+
+  const body = {
+    system_instruction: { parts: [{ text: systemPrompt }] },
+    contents,
+    generationConfig: {
+      maxOutputTokens: 220,
+      temperature: 0.9,
+      topP: 0.95,
+    },
+  };
+
+  try {
+    const raw = await httpsPost(GEMINI_ENDPOINT, apiKey, body);
+    const parsed = JSON.parse(raw);
+    const text: string | undefined =
+      parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (text && text.trim().length > 0) {
+      return text.trim();
+    }
+    return null;
+  } catch (e) {
+    console.warn("[Star] Gemini API error:", e instanceof Error ? e.message : e);
+    return null;
+  }
+}
 
 export async function processChat(
   message: string,
@@ -116,7 +218,9 @@ export async function processChat(
   }
 
   const historyLength = history.length;
-  const response = generateStarResponse(signals, matches, noMatchFallbacks, historyLength);
+  const allMatchesForGemini = matches.length > 0 ? matches : noMatchFallbacks;
+  const geminiResponse = await callGemini(message, signals, allMatchesForGemini, history);
+  const response = geminiResponse ?? generateStarResponse(signals, matches, noMatchFallbacks, historyLength);
 
   const implicitFeedback =
     signals.likedGenres.length > 0 ||
