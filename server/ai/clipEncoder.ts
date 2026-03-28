@@ -14,9 +14,9 @@ const MODELS_DIR = path.join(process.cwd(), "models");
 
 const MODEL_URLS = {
   visual:
-    "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/vision_model_fp32.onnx",
+    "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/vision_model_quantized.onnx",
   text:
-    "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/text_model_fp32.onnx",
+    "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/text_model_quantized.onnx",
   vocab:
     "https://raw.githubusercontent.com/openai/CLIP/main/clip/bpe_simple_vocab_16e6.txt.gz",
 };

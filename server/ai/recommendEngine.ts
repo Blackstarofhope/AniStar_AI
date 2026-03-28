@@ -83,16 +83,27 @@ function initEngine(userId: string): EngineState {
   if (userId === "default") {
     const saved = loadModelState();
     if (saved) {
-      return {
-        network: deserializeNetwork(saved.network),
-        kuramoto: saved.kuramoto,
-        neurogenesis: saved.neurogenesis,
-        ewc: saved.ewc,
-        ratings: saved.ratings || [],
-        allAnimeEmbeddings: saved.allAnimeEmbeddings || [],
-        isTraining: false,
-        restTrainedAt: saved.restTrainedAt ?? null,
-      };
+      const firstHiddenSize = saved.network.layers[0]?.biases?.length ?? 0;
+      const expectedHiddenSize = LAYER_SIZES[1];
+      if (firstHiddenSize !== expectedHiddenSize) {
+        console.log(
+          `[AI] Saved network dim mismatch (firstHidden=${firstHiddenSize} vs expected ${expectedHiddenSize}) — starting fresh.`
+        );
+      } else {
+        const validEmbeddings = (saved.allAnimeEmbeddings || []).filter(
+          (e) => e.embedding.length === EMBEDDING_DIM
+        );
+        return {
+          network: deserializeNetwork(saved.network),
+          kuramoto: saved.kuramoto,
+          neurogenesis: saved.neurogenesis,
+          ewc: saved.ewc,
+          ratings: saved.ratings || [],
+          allAnimeEmbeddings: validEmbeddings,
+          isTraining: false,
+          restTrainedAt: saved.restTrainedAt ?? null,
+        };
+      }
     }
   }
 
