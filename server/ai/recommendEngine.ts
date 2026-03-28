@@ -18,8 +18,9 @@ import {
 import {
   embedAnime, buildUserPreferenceVector, tfidfWeight,
   buildTFIDFContext, tfidfWeightWithContext, EMBEDDING_DIM,
-  type AnimeInfo
+  embedAnimeWithFallback, type AnimeInfo
 } from "./textEmbedder.js";
+import { loadCLIP } from "./clipEncoder.js";
 import { verifyArtwork, type VerificationResult } from "./visionVerifier.js";
 import {
   loadModelState, saveModelState, type ModelState
@@ -27,8 +28,8 @@ import {
 import { cosineSim, normalize } from "./matrix.js";
 import { getAllCurrentAnime, type AnimeScheduleItem } from "./animeData.js";
 
-const LAYER_SIZES = [EMBEDDING_DIM, 96, 48, 24];
-const KURAMOTO_SIZE = 96;
+const LAYER_SIZES = [EMBEDDING_DIM, 256, 128, 64];
+const KURAMOTO_SIZE = 256;
 
 export interface Recommendation {
   mal_id: number;
@@ -71,6 +72,8 @@ interface EngineState {
 let engine: EngineState | null = null;
 
 function initEngine(): EngineState {
+  loadCLIP().catch((e) => console.warn("[CLIP] Failed to preload:", e));
+
   const saved = loadModelState();
 
   if (saved) {
@@ -144,40 +147,40 @@ function buildRecommendationItem(
 
 const UNVERIFIED: { verified: boolean; score: number; visionEmbedding: number[] } = { verified: false, score: 0, visionEmbedding: [] };
 
-function scoreAnimeList(
+async function scoreAnimeList(
   eng: ReturnType<typeof getEngine>,
   animeList: AnimeScheduleItem[],
   userPref: number[],
   limit: number
-): { anime: AnimeScheduleItem; score: number; embedding: number[] }[] {
+): Promise<{ anime: AnimeScheduleItem; score: number; embedding: number[] }[]> {
   const scored: { anime: AnimeScheduleItem; score: number; embedding: number[] }[] = [];
 
   const embeddingCache = new Map<number, number[]>(
     eng.allAnimeEmbeddings.map((e) => [e.animeId, e.embedding])
   );
 
-  const ctx = buildTFIDFContext(animeList as AnimeInfo[]);
+  await Promise.all(
+    animeList.map(async (anime) => {
+      try {
+        let embedding = embeddingCache.get(anime.mal_id);
+        if (!embedding) {
+          embedding = await embedAnimeWithFallback(anime as AnimeInfo);
+          embeddingCache.set(anime.mal_id, embedding);
+          eng.allAnimeEmbeddings.push({ animeId: anime.mal_id, embedding });
+          if (eng.allAnimeEmbeddings.length > 2000) eng.allAnimeEmbeddings.shift();
+        }
 
-  for (const anime of animeList) {
-    try {
-      let embedding = embeddingCache.get(anime.mal_id);
-      if (!embedding) {
-        embedding = tfidfWeightWithContext(ctx, anime as AnimeInfo);
-        embeddingCache.set(anime.mal_id, embedding);
-        eng.allAnimeEmbeddings.push({ animeId: anime.mal_id, embedding });
-        if (eng.allAnimeEmbeddings.length > 2000) eng.allAnimeEmbeddings.shift();
+        const modulated = phaseModulatedEmbedding(embedding, eng.kuramoto.textPhases);
+        const finalEmbedding = normalize(modulated);
+        const ffScore = infer(eng.network, finalEmbedding);
+        const cosSim = cosineSim(finalEmbedding, userPref);
+        const combinedScore = 0.6 * Math.tanh(ffScore / 5) + 0.4 * (cosSim + 1) / 2;
+        scored.push({ anime, score: combinedScore, embedding });
+      } catch {
+        return;
       }
-
-      const modulated = phaseModulatedEmbedding(embedding, eng.kuramoto.textPhases);
-      const finalEmbedding = normalize(modulated);
-      const ffScore = infer(eng.network, finalEmbedding);
-      const cosSim = cosineSim(finalEmbedding, userPref);
-      const combinedScore = 0.6 * Math.tanh(ffScore / 5) + 0.4 * (cosSim + 1) / 2;
-      scored.push({ anime, score: combinedScore, embedding });
-    } catch {
-      continue;
-    }
-  }
+    })
+  );
 
   scored.sort((a, b) => b.score - a.score);
   return scored.slice(0, limit);
@@ -197,7 +200,7 @@ export async function getRecommendations(limit = 10, deadlineMs = 12000): Promis
       eng.ratings.map((r) => ({ embedding: r.embedding, rating: r.rating }))
     );
 
-    const topAnime = scoreAnimeList(eng, animeList, userPref, limit);
+    const topAnime = await scoreAnimeList(eng, animeList, userPref, limit);
 
     for (const { anime, score } of topAnime) {
       partialResults.push(buildRecommendationItem(anime, score, UNVERIFIED));
@@ -280,7 +283,7 @@ export async function processFeedback(
       const animeList = await getAllCurrentAnime();
       const anime = animeList.find((a) => a.mal_id === malId);
       if (anime) {
-        embedding = tfidfWeight(animeList as AnimeInfo[], anime as AnimeInfo);
+        embedding = await embedAnimeWithFallback(anime as AnimeInfo);
         eng.allAnimeEmbeddings.push({ animeId: malId, embedding });
       } else {
         const vec = new Array(EMBEDDING_DIM).fill(0.1);
