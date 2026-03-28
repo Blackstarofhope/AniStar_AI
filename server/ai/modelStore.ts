@@ -4,6 +4,7 @@ import type { FFNetworkState } from "./forwardForward.js";
 import type { KuramotoState } from "./kuramoto.js";
 import type { NeurogenesisState } from "./neurogenesis.js";
 import type { EWCState } from "./ewc.js";
+import type { StarLearningState } from "./starLearning.js";
 
 const MODEL_PATH = path.resolve(process.cwd(), "ai-model-state.json");
 
@@ -17,6 +18,8 @@ export interface ModelState {
   allAnimeEmbeddings: { animeId: number; embedding: number[] }[];
   restTrainedAt?: number;
   savedAt: string;
+  /** Star's chat learning state — optional so existing saves load cleanly. */
+  starLearning?: StarLearningState;
 }
 
 const CURRENT_VERSION = 2;

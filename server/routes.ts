@@ -8,6 +8,7 @@ import { getSchedule, getSeasonalAnime, getAnimeDetails } from "./ai/animeData.j
 import { validateImageUrl } from "./ai/visionVerifier.js";
 import { processChat, STAR_NAME, STAR_BIO } from "./ai/starChat.js";
 import type { ChatMessage } from "./ai/starChat.js";
+import { initStarLearning, recordChatFeedback } from "./ai/starLearning.js";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/anime/schedule", async (req: Request, res: Response) => {
@@ -125,6 +126,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.post("/api/ai/chat/feedback", (req: Request, res: Response) => {
+    const { message, categoryId, isPositive } = req.body as {
+      message?: string;
+      categoryId?: string;
+      isPositive?: boolean;
+    };
+    if (
+      typeof message !== "string" || message.trim().length === 0 ||
+      typeof categoryId !== "string" || categoryId.trim().length === 0 ||
+      typeof isPositive !== "boolean"
+    ) {
+      return res.status(400).json({ error: "message, categoryId, and isPositive are required" });
+    }
+    try {
+      recordChatFeedback(message.trim(), categoryId.trim(), isPositive);
+      res.json({ success: true });
+    } catch (e) {
+      console.error("[Star] Chat feedback error:", e);
+      res.status(500).json({ error: "Failed to record chat feedback" });
+    }
+  });
+
   app.get("/api/ai/star", (_req: Request, res: Response) => {
     res.json({ name: STAR_NAME, bio: STAR_BIO, restTrained: hasRestTrained() });
   });
@@ -146,6 +169,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log("[Star] No prior rest training found — starting background base-knowledge pass...");
       restTrain().catch((e) => console.error("[Star] Auto rest-train failed:", e));
     }
+    initStarLearning().catch((e) => console.error("[Star] Learning init failed:", e));
   }, 5000);
 
   return httpServer;
