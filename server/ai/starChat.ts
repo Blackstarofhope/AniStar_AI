@@ -38,7 +38,7 @@ export { STAR_NAME, STAR_BIO };
 // Gemini API integration
 // ---------------------------------------------------------------------------
 
-const GEMINI_MODEL = "gemini-2.0-flash";
+const GEMINI_MODEL = "gemini-2.5-flash";
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 function httpsPost(url: string, apiKey: string, body: object): Promise<string> {
@@ -75,32 +75,18 @@ function httpsPost(url: string, apiKey: string, body: object): Promise<string> {
 
 async function callGemini(
   userMessage: string,
-  signals: ChatSignals,
-  matches: AnimeInfo[],
   history: ChatMessage[]
 ): Promise<string | null> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
 
-  const likedStr = signals.likedGenres.length > 0
-    ? `Liked genres: ${signals.likedGenres.join(", ")}.` : "";
-  const dislikedStr = signals.dislikedGenres.length > 0
-    ? `Disliked genres: ${signals.dislikedGenres.join(", ")}.` : "";
-  const moodStr = signals.moodGenres.length > 0
-    ? `Mood-matched genres: ${signals.moodGenres.join(", ")}.` : "";
-
-  const matchLines = matches.slice(0, 4).map((a) => {
-    const genres = (a.genres || []).map((g) => g.name).join(", ");
-    return `- ${a.title} (score: ${a.score ?? "N/A"}, genres: ${genres || "N/A"})`;
-  }).join("\n");
-
-  const systemPrompt = [
-    `You are ${STAR_NAME}, an AI anime guide. ${STAR_BIO}`,
-    `Respond in character as Star. Keep responses conversational and under 150 words.`,
-    `If the user mentions an anime not in the provided catalog, acknowledge it and discuss it using your own knowledge. Suggest similar anime.`,
-    likedStr, dislikedStr, moodStr,
-    matchLines ? `Current catalog matches:\n${matchLines}` : "",
-  ].filter(Boolean).join("\n");
+  const systemPrompt =
+    `You are ${STAR_NAME}, an AI anime guide. ${STAR_BIO} ` +
+    `Respond in character as Star — warm, poetic, knowledgeable. ` +
+    `You have deep knowledge of all anime, not just currently airing shows. ` +
+    `When the user mentions a specific anime, discuss it knowledgeably and suggest similar titles. ` +
+    `When they ask for recommendations, ask about their preferences first or suggest based on conversation context. ` +
+    `Keep responses conversational and under 150 words.`;
 
   const contents = [
     ...history.slice(-6).map((m) => ({
@@ -117,14 +103,17 @@ async function callGemini(
       maxOutputTokens: 220,
       temperature: 0.9,
       topP: 0.95,
+      thinkingConfig: { thinkingBudget: 0 },
     },
   };
 
   try {
     const raw = await httpsPost(GEMINI_ENDPOINT, apiKey, body);
     const parsed = JSON.parse(raw);
-    const text: string | undefined =
-      parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const parts: { text?: string; thought?: boolean }[] =
+      parsed?.candidates?.[0]?.content?.parts ?? [];
+    const responsePart = parts.find((p) => !p.thought && p.text && p.text.trim().length > 0);
+    const text = responsePart?.text;
     if (text && text.trim().length > 0) {
       return text.trim();
     }
@@ -218,8 +207,7 @@ export async function processChat(
   }
 
   const historyLength = history.length;
-  const allMatchesForGemini = matches.length > 0 ? matches : noMatchFallbacks;
-  const geminiResponse = await callGemini(message, signals, allMatchesForGemini, history);
+  const geminiResponse = await callGemini(message, history);
   const response = geminiResponse ?? generateStarResponse(signals, matches, noMatchFallbacks, historyLength);
 
   const implicitFeedback =
