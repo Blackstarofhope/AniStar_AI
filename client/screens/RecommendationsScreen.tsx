@@ -264,6 +264,7 @@ const styles = StyleSheet.create({
 
 const stripStyles = StyleSheet.create({
   outerScroll: {
+    flexGrow: 0,
     flexShrink: 0,
   },
   container: {
