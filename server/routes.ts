@@ -129,7 +129,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         )
       : [];
     try {
-      const result = await processChat(message.trim(), safeHistory);
+      const userId = extractUserId(req);
+      const result = await processChat(message.trim(), safeHistory, userId);
       res.json(result);
     } catch (e) {
       console.error("[Star] Chat error:", e);

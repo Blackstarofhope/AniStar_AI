@@ -73,12 +73,48 @@ function httpsPost(url: string, apiKey: string, body: object): Promise<string> {
   });
 }
 
-function extractPotentialTitle(message: string): string | null {
+const titleExtractionCache = new Map<string, string | null>();
+const TITLE_CACHE_MAX = 500;
+
+async function extractTitleViaGemini(message: string): Promise<string | null> {
   const quoted = message.match(/["']([A-Za-z0-9][^"']{2,60})["']/);
   if (quoted) return quoted[1].trim();
-  const capPhrase = message.match(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b/);
-  if (capPhrase) return capPhrase[1].trim();
-  return null;
+
+  if (titleExtractionCache.has(message)) return titleExtractionCache.get(message) ?? null;
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+
+  const body = {
+    system_instruction: {
+      parts: [{ text: "Extract the anime title from the user's message. Respond with ONLY the anime title, nothing else. If there is no anime title mentioned, respond with exactly: NONE" }],
+    },
+    contents: [{ role: "user", parts: [{ text: message }] }],
+    generationConfig: {
+      maxOutputTokens: 30,
+      temperature: 0,
+      thinkingConfig: { thinkingBudget: 0 },
+    },
+  };
+
+  try {
+    const raw = await httpsPost(GEMINI_ENDPOINT, apiKey, body);
+    const parsed = JSON.parse(raw);
+    const parts: { text?: string; thought?: boolean }[] =
+      parsed?.candidates?.[0]?.content?.parts ?? [];
+    const responsePart = parts.find((p) => !p.thought && p.text && p.text.trim().length > 0);
+    const text = responsePart?.text?.trim();
+    const result = text && text !== "NONE" ? text : null;
+
+    if (titleExtractionCache.size >= TITLE_CACHE_MAX) {
+      titleExtractionCache.delete(titleExtractionCache.keys().next().value!);
+    }
+    titleExtractionCache.set(message, result);
+    return result;
+  } catch {
+    titleExtractionCache.set(message, null);
+    return null;
+  }
 }
 
 async function callGemini(
@@ -136,7 +172,8 @@ async function callGemini(
 
 export async function processChat(
   message: string,
-  history: ChatMessage[]
+  history: ChatMessage[],
+  userId = "default"
 ): Promise<ChatResponse> {
   const catalog = await getAllCurrentAnime();
   const catalogTitles = catalog.map((a) => a.title);
@@ -220,7 +257,7 @@ export async function processChat(
 
   let searchContext: string | undefined;
   if (signals.mentionedTitles.length === 0) {
-    const potentialTitle = extractPotentialTitle(message);
+    const potentialTitle = await extractTitleViaGemini(message);
     if (potentialTitle) {
       const searchResults = await searchAndAddAnime(potentialTitle);
       if (searchResults.length > 0) {
@@ -234,7 +271,7 @@ export async function processChat(
           }
         }
         if (entries.length > 0) {
-          addAnimeEmbeddings("default", entries);
+          addAnimeEmbeddings(userId, entries);
         }
         const titles = searchResults.map((a) => {
           const genres = (a.genres ?? []).map((g) => g.name).join(", ");
