@@ -7,7 +7,7 @@ import { processFeedback, getTopAnimeByGenres } from "./recommendEngine.js";
 import type { AnimeInfo } from "./textEmbedder.js";
 import {
   isStarLearningReady,
-  embedChatText,
+  embedChatTextWithFallback,
   selectResponseFromEmb,
   recordInteraction,
   recordInteractionByCategory,
@@ -53,7 +53,7 @@ export async function processChat(
   let learningCategory: string | undefined;
 
   if (isStarLearningReady()) {
-    const inputEmb = embedChatText(message);
+    const inputEmb = await embedChatTextWithFallback(message);
 
     if (hasKeywordSignals) {
       // Keyword signals are reliable ground truth → reinforce them in the FF

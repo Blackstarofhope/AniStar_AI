@@ -20,6 +20,7 @@ import {
 } from "./forwardForward.js";
 import { createEWCState, computeFisher, type EWCState } from "./ewc.js";
 import { GENRE_KEYWORD_MAP, MOOD_MAP } from "./starPersonality.js";
+import { encodeText, loadCLIP, isLoaded as clipIsLoaded } from "./clipEncoder.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -28,13 +29,13 @@ import { GENRE_KEYWORD_MAP, MOOD_MAP } from "./starPersonality.js";
 const STAR_LEARNING_PATH = path.resolve(process.cwd(), "ai-star-learning-state.json");
 
 /** Dimension of the chat-text embedding. */
-const CHAT_EMB_DIM = 64;
+const CHAT_EMB_DIM = 512;
 
 /** The FF network takes a concatenated (input_emb ‖ response_emb) vector. */
 const PAIR_DIM = CHAT_EMB_DIM * 2;
 
 /** Layer sizes for Star's chat FF network. */
-const NET_LAYERS = [PAIR_DIM, 64, 32];
+const NET_LAYERS = [PAIR_DIM, 256, 128];
 
 /**
  * Minimum FF "goodness" score below which the learning system defers to the
@@ -103,10 +104,10 @@ function hashMod(token: string, buckets: number): number {
 }
 
 /**
- * Hash-based bag-of-words embedding.
- * Produces a normalised CHAT_EMB_DIM-dimensional vector from any text.
+ * Hash-based bag-of-words embedding (sync fallback, pads to CHAT_EMB_DIM).
+ * Used for bootstrap/seed embeddings and when CLIP is not loaded.
  */
-export function embedChatText(text: string): number[] {
+export function embedChatTextFallback(text: string): number[] {
   const tokens = text
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")
@@ -117,6 +118,28 @@ export function embedChatText(text: string): number[] {
     vec[hashMod(token, CHAT_EMB_DIM)] += 1;
   }
   return normalize(vec);
+}
+
+/**
+ * CLIP text embedding — 512-dimensional, semantically rich.
+ */
+export async function embedChatTextCLIP(text: string): Promise<number[]> {
+  const emb = await encodeText(text);
+  return Array.from(emb);
+}
+
+/**
+ * Try CLIP first; fall back to hash-based embedding on failure or if not loaded.
+ */
+export async function embedChatTextWithFallback(text: string): Promise<number[]> {
+  if (clipIsLoaded()) {
+    try {
+      return await embedChatTextCLIP(text);
+    } catch {
+      // fall through
+    }
+  }
+  return embedChatTextFallback(text);
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +207,7 @@ function buildResponsePool(): ResponsePoolEntry[] {
     pool.push({
       id: `genre:${genre}`,
       text: desc,
-      embedding: embedChatText(desc),
+      embedding: embedChatTextFallback(desc),
       category: `genre:${genre}`,
     });
   }
@@ -193,7 +216,7 @@ function buildResponsePool(): ResponsePoolEntry[] {
     pool.push({
       id: `mood:${mood}`,
       text: desc,
-      embedding: embedChatText(desc),
+      embedding: embedChatTextFallback(desc),
       category: `mood:${mood}`,
     });
   }
@@ -205,7 +228,7 @@ function buildResponsePool(): ResponsePoolEntry[] {
     "every story unique what kind of feeling are you searching for today",
   ];
   generalTexts.forEach((text, i) => {
-    pool.push({ id: `general:${i}`, text, embedding: embedChatText(text), category: "general" });
+    pool.push({ id: `general:${i}`, text, embedding: embedChatTextFallback(text), category: "general" });
   });
 
   const introTexts = [
@@ -214,7 +237,7 @@ function buildResponsePool(): ResponsePoolEntry[] {
     "greetings i am star shaped by every genre emotion story made someone feel less alone",
   ];
   introTexts.forEach((text, i) => {
-    pool.push({ id: `intro:${i}`, text, embedding: embedChatText(text), category: "intro" });
+    pool.push({ id: `intro:${i}`, text, embedding: embedChatTextFallback(text), category: "intro" });
   });
 
   return pool;
@@ -264,7 +287,7 @@ function bootstrapTrain(state: StarLearningState): void {
     ];
 
     for (const msg of syntheticMessages) {
-      const inputEmb = embedChatText(msg);
+      const inputEmb = embedChatTextFallback(msg);
       const pos = makePairInput(inputEmb, posEntry.embedding);
 
       const otherGenres = allGenreNames.filter((g) => g !== genre);
@@ -283,7 +306,7 @@ function bootstrapTrain(state: StarLearningState): void {
     const posEntry = genreToEntry.get(primaryGenre);
     if (!posEntry) continue;
 
-    const inputEmb = embedChatText(`I feel ${moodKw} mood want anime`);
+    const inputEmb = embedChatTextFallback(`I feel ${moodKw} mood want anime`);
     const pos = makePairInput(inputEmb, posEntry.embedding);
 
     const otherGenres = allGenreNames.filter((g) => !genres.includes(g));
@@ -355,14 +378,21 @@ function loadPersistedState(): StarLearningState | null {
  */
 export async function initStarLearning(): Promise<void> {
   const existing = loadPersistedState();
-  if (existing?.bootstrapped) {
+  // Discard saved state if network input dim doesn't match PAIR_DIM (architecture changed)
+  const savedInputDim = existing?.network?.layers?.[0]?.weights?.[0]?.length ?? 0;
+  if (existing?.bootstrapped && savedInputDim === PAIR_DIM) {
     _state = existing;
     _ready = true;
     console.log(
       `[Star] Loaded learning state — epoch ${existing.network.epoch}, ` +
       `${existing.responsePool.length} pool entries`
     );
+    upgradePoolToCLIP().catch(() => {});
     return;
+  }
+
+  if (existing && savedInputDim !== PAIR_DIM) {
+    console.log(`[Star] Saved state dim mismatch (${savedInputDim} vs ${PAIR_DIM}) — re-bootstrapping.`);
   }
 
   console.log("[Star] Bootstrapping learning system from keyword map...");
@@ -381,10 +411,46 @@ export async function initStarLearning(): Promise<void> {
   _state = fresh;
   _ready = true;
   console.log("[Star] Learning system ready.");
+  upgradePoolToCLIP().catch(() => {});
 }
 
 export function isStarLearningReady(): boolean {
   return _ready && _state !== null;
+}
+
+// ---------------------------------------------------------------------------
+// Pool CLIP upgrade
+// ---------------------------------------------------------------------------
+
+/**
+ * Re-embeds all response pool entries using CLIP once models are available.
+ * Falls back gracefully if CLIP fails to load or encode.
+ */
+export async function upgradePoolToCLIP(): Promise<void> {
+  if (!_state) return;
+  try {
+    if (!clipIsLoaded()) {
+      await loadCLIP();
+    }
+    if (!clipIsLoaded()) return;
+
+    let upgraded = 0;
+    for (const entry of _state.responsePool) {
+      try {
+        entry.embedding = await embedChatTextCLIP(entry.text);
+        upgraded++;
+      } catch {
+        // keep fallback embedding for this entry
+      }
+    }
+
+    if (upgraded > 0) {
+      persistState(_state);
+      console.log(`[Star] Pool upgraded to CLIP embeddings (${upgraded} entries).`);
+    }
+  } catch (e) {
+    console.warn("[Star] upgradePoolToCLIP skipped:", e);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -413,9 +479,10 @@ export function selectResponseFromEmb(inputEmb: number[]): SelectionResult | nul
   return { entry: bestEntry, goodness: bestGoodness, inputEmb };
 }
 
-/** Convenience wrapper — embeds `message` then calls selectResponseFromEmb. */
-export function selectResponse(message: string): SelectionResult | null {
-  return selectResponseFromEmb(embedChatText(message));
+/** Convenience wrapper — embeds `message` with CLIP (or fallback) then calls selectResponseFromEmb. */
+export async function selectResponse(message: string): Promise<SelectionResult | null> {
+  const emb = await embedChatTextWithFallback(message);
+  return selectResponseFromEmb(emb);
 }
 
 // ---------------------------------------------------------------------------
@@ -506,7 +573,7 @@ export function recordChatFeedback(
   isPositive: boolean
 ): void {
   if (!_state) return;
-  const inputEmb = embedChatText(message);
+  const inputEmb = embedChatTextFallback(message);
   const entry = _state.responsePool.find(
     (e) => e.id === categoryId || e.category === categoryId
   );
