@@ -1,0 +1,20 @@
+Make two changes to add anime search and catalog expansion:
+
+1. In server/ai/animeData.ts, add a new exported async function called "searchAndAddAnime" that takes a query string and returns Promise<AnimeScheduleItem[]>. It should:
+   - Call the Jikan API: https://api.jikan.moe/v4/anime?q={encodeURIComponent(query)}&limit=5&sfw=true
+   - Filter out kids shows using the existing isKidsShow function
+   - For each result found, add it to the scheduleCache under key "searched" — merge with any existing "searched" entries, deduplicate by mal_id, cap at 200 entries
+   - Return the results
+   - Add a rate limit: if called within the last 1 second, return empty array (Jikan has rate limits)
+
+2. In server/ai/starChat.ts processChat function, add anime search logic BEFORE the callGemini call:
+   - After extracting signals, check if the user's message likely contains an anime title not in the catalog. Do this by: if signals.mentionedTitles is empty AND the message contains a capitalized multi-word phrase or quoted text, extract that phrase as a potential title.
+   - Call searchAndAddAnime with the extracted phrase
+   - If results come back, pass them to Gemini by adding a line to the system prompt: "The user appears to be asking about: [titles and genres from search results]. These have been added to the recommendation system."
+   - Also embed the search results using embedAnimeWithFallback and add them to the engine's allAnimeEmbeddings via a new exported helper function in recommendEngine.ts called "addAnimeEmbeddings(userId, entries: {animeId: number, embedding: number[]}[])" that pushes to the engine's allAnimeEmbeddings array.
+
+3. In server/ai/recommendEngine.ts, add the exported function "addAnimeEmbeddings(userId: string, entries: {animeId: number, embedding: number[]}[])" that gets the engine for that userId and pushes the entries to allAnimeEmbeddings, deduplicating by animeId, capping at 2000.
+
+4. Also update getAllCurrentAnime to include any "searched" entries from the scheduleCache so they appear in future recommendation runs for all users.
+
+Do not modify any other files.
