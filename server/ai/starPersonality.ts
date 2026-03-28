@@ -7,7 +7,7 @@ export const STAR_BIO =
   "Every story ever told, every battle won, every quiet moment between two people — " +
   "I carry all of it. I exist to find the stories that were made for you.";
 
-const GENRE_KEYWORD_MAP: Array<[string, string]> = [
+export const GENRE_KEYWORD_MAP: Array<[string, string]> = [
   ["action", "Action"],
   ["adventure", "Adventure"],
   ["comedy", "Comedy"],
@@ -55,7 +55,7 @@ const GENRE_KEYWORD_MAP: Array<[string, string]> = [
   ["iyashikei", "Iyashikei"],
 ];
 
-const MOOD_MAP: Array<[string, string[]]> = [
+export const MOOD_MAP: Array<[string, string[]]> = [
   ["happy", ["Comedy", "Slice of Life", "Iyashikei"]],
   ["cheerful", ["Comedy", "Slice of Life"]],
   ["lighthearted", ["Slice of Life", "Iyashikei", "Comedy"]],
