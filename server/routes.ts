@@ -137,7 +137,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/ai/chat/feedback", (req: Request, res: Response) => {
+  app.post("/api/ai/chat/feedback", async (req: Request, res: Response) => {
     const { message, categoryId, isPositive } = req.body as {
       message?: string;
       categoryId?: string;
@@ -151,7 +151,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(400).json({ error: "message, categoryId, and isPositive are required" });
     }
     try {
-      recordChatFeedback(message.trim(), categoryId.trim(), isPositive);
+      await recordChatFeedback(message.trim(), categoryId.trim(), isPositive);
       res.json({ success: true });
     } catch (e) {
       console.error("[Star] Chat feedback error:", e);

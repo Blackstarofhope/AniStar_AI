@@ -16,9 +16,8 @@ import {
   getReplayStats, type EWCState, type ReplayEntry
 } from "./ewc.js";
 import {
-  embedAnime, buildUserPreferenceVector, tfidfWeight,
-  buildTFIDFContext, tfidfWeightWithContext, EMBEDDING_DIM,
-  embedAnimeWithFallback, type AnimeInfo
+  embedAnime, buildUserPreferenceVector,
+  EMBEDDING_DIM, embedAnimeWithFallback, type AnimeInfo
 } from "./textEmbedder.js";
 import { loadCLIP } from "./clipEncoder.js";
 import { verifyArtwork, type VerificationResult } from "./visionVerifier.js";
@@ -483,7 +482,6 @@ export async function restTrain(userId = "default"): Promise<RestTrainResult> {
     return { animeCount: 0, trainedCount: 0, highQualityCount: 0, elapsedMs: Date.now() - startMs, epoch: eng.network.epoch };
   }
 
-  const ctx = buildTFIDFContext(animeList as AnimeInfo[]);
   const embeddingCache = new Map<number, number[]>(
     eng.allAnimeEmbeddings.map((e) => [e.animeId, e.embedding])
   );
@@ -497,7 +495,7 @@ export async function restTrain(userId = "default"): Promise<RestTrainResult> {
     try {
       let embedding = embeddingCache.get(anime.mal_id);
       if (!embedding) {
-        embedding = tfidfWeightWithContext(ctx, anime as AnimeInfo);
+        embedding = await embedAnimeWithFallback(anime as AnimeInfo);
         embeddingCache.set(anime.mal_id, embedding);
         eng.allAnimeEmbeddings.push({ animeId: anime.mal_id, embedding });
         if (eng.allAnimeEmbeddings.length > 2000) eng.allAnimeEmbeddings.shift();

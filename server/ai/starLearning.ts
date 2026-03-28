@@ -567,13 +567,13 @@ export function recordInteractionByCategory(
  * Re-embeds `message` server-side, finds the matching pool entry, trains,
  * and persists state.
  */
-export function recordChatFeedback(
+export async function recordChatFeedback(
   message: string,
   categoryId: string,
   isPositive: boolean
-): void {
+): Promise<void> {
   if (!_state) return;
-  const inputEmb = embedChatTextFallback(message);
+  const inputEmb = await embedChatTextWithFallback(message);
   const entry = _state.responsePool.find(
     (e) => e.id === categoryId || e.category === categoryId
   );
