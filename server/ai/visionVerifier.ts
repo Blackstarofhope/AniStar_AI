@@ -2,6 +2,7 @@ import * as https from "https";
 import * as http from "http";
 import * as crypto from "crypto";
 import dns from "node:dns/promises";
+import { encodeImageBuffer, encodeText, cosineSimilarity, isLoaded as clipIsLoaded } from "./clipEncoder.js";
 
 let Jimp: typeof import("jimp-compact") | null = null;
 async function getJimp() {
@@ -11,7 +12,7 @@ async function getJimp() {
   return Jimp;
 }
 
-export const VISION_DIM = 72;
+export const VISION_DIM = 512;
 
 export interface VerificationResult {
   verified: boolean;
@@ -131,94 +132,26 @@ function fetchImageBytes(url: string): Promise<{
 
 async function computeColorHistogramEmbedding(buf: Buffer): Promise<number[] | null> {
   try {
-    const jimp = await getJimp();
-    const img = await (jimp as unknown as { read(b: Buffer): Promise<{
-      bitmap: { width: number; height: number; data: Buffer };
-      resize(w: number, h: number, mode?: string): unknown;
-    }> }).read(buf);
-
-    const { width, height, data } = img.bitmap;
-    if (width === 0 || height === 0) return null;
-
-    const GRID = 4;
-    const CHANNELS = 3;
-    const HIST_BINS = 6;
-    const SPATIAL_DIMS = GRID * GRID * CHANNELS;
-    const HIST_DIMS = HIST_BINS * CHANNELS;
-    const TOTAL_DIMS = SPATIAL_DIMS + HIST_DIMS;
-
-    const spatialGrid = new Float64Array(SPATIAL_DIMS).fill(0);
-    const cellCount = new Float64Array(GRID * GRID).fill(0);
-    const histCounts = new Float64Array(HIST_DIMS).fill(0);
-    let totalPixels = 0;
-
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const idx = (y * width + x) * 4;
-        const r = data[idx] / 255;
-        const g = data[idx + 1] / 255;
-        const b = data[idx + 2] / 255;
-
-        const gx = Math.min(GRID - 1, Math.floor((x / width) * GRID));
-        const gy = Math.min(GRID - 1, Math.floor((y / height) * GRID));
-        const cell = gy * GRID + gx;
-
-        spatialGrid[cell * CHANNELS] += r;
-        spatialGrid[cell * CHANNELS + 1] += g;
-        spatialGrid[cell * CHANNELS + 2] += b;
-        cellCount[cell]++;
-
-        const rb = Math.min(HIST_BINS - 1, Math.floor(r * HIST_BINS));
-        const gb2 = Math.min(HIST_BINS - 1, Math.floor(g * HIST_BINS));
-        const bb = Math.min(HIST_BINS - 1, Math.floor(b * HIST_BINS));
-        histCounts[rb]++;
-        histCounts[HIST_BINS + gb2]++;
-        histCounts[HIST_BINS * 2 + bb]++;
-        totalPixels++;
-      }
+    if (clipIsLoaded()) {
+      const embedding = await encodeImageBuffer(buf);
+      return Array.from(embedding);
     }
-
-    const raw: number[] = [];
-
-    for (let c = 0; c < GRID * GRID; c++) {
-      const n = cellCount[c] || 1;
-      raw.push((spatialGrid[c * CHANNELS] / n) * 2 - 1);
-      raw.push((spatialGrid[c * CHANNELS + 1] / n) * 2 - 1);
-      raw.push((spatialGrid[c * CHANNELS + 2] / n) * 2 - 1);
-    }
-
-    const totalP = totalPixels || 1;
-    for (let i = 0; i < HIST_DIMS; i++) {
-      raw.push((histCounts[i] / totalP) * 4 - 1);
-    }
-
-    const norm = Math.sqrt(raw.reduce((s, v) => s + v * v, 0)) + 1e-8;
-    const embedding = raw.map((v) => v / norm);
-
-    if (embedding.length < VISION_DIM) {
-      while (embedding.length < VISION_DIM) embedding.push(0);
-    }
-    return embedding.slice(0, VISION_DIM);
+    return null;
   } catch {
     return null;
   }
 }
 
-function titleToSemanticVector(title: string): number[] {
-  const lower = title.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const hash = crypto.createHash("sha256").update(lower).digest();
-  const vec: number[] = [];
-  for (let i = 0; i < Math.min(32, hash.length); i++) {
-    vec.push((hash[i] / 255) * 2 - 1);
-  }
-  while (vec.length < VISION_DIM) {
-    const h2 = crypto.createHash("sha256").update(lower + vec.length).digest();
-    for (let i = 0; i < h2.length && vec.length < VISION_DIM; i++) {
-      vec.push((h2[i] / 255) * 2 - 1);
+async function titleToSemanticVector(title: string): Promise<number[]> {
+  if (clipIsLoaded()) {
+    try {
+      const embedding = await encodeText(title);
+      return Array.from(embedding);
+    } catch {
+      return new Array(VISION_DIM).fill(0);
     }
   }
-  const norm = Math.sqrt(vec.reduce((s, v) => s + v * v, 0)) + 1e-8;
-  return vec.slice(0, VISION_DIM).map((v) => v / norm);
+  return new Array(VISION_DIM).fill(0);
 }
 
 function cosine(a: number[], b: number[]): number {
@@ -282,8 +215,8 @@ export async function verifyArtwork(
 
       let score = 0.6;
       if (visionEmbedding && title) {
-        const titleVec = titleToSemanticVector(title);
-        const sim = cosine(visionEmbedding, titleVec);
+        const titleVec = await titleToSemanticVector(title);
+        const sim = cosineSimilarity(new Float32Array(visionEmbedding), new Float32Array(titleVec));
         score = 0.5 + ((sim + 1) / 2) * 0.5;
       } else if (visionEmbedding) {
         score = 0.7;
@@ -294,9 +227,9 @@ export async function verifyArtwork(
         score: Math.round(score * 100) / 100,
         reason: visionEmbedding
           ? score >= 0.55
-            ? "Artwork verified by color histogram vision encoder"
+            ? "Artwork verified by CLIP vision encoder"
             : "Visual-semantic alignment below threshold"
-          : "Artwork verified (pixel extraction failed, used metadata)",
+          : "Artwork verified (CLIP not loaded, used metadata)",
         imageHash,
         visionEmbedding: visionEmbedding ?? undefined,
       };
