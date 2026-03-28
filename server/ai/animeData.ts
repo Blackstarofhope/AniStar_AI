@@ -36,6 +36,8 @@ function isKidsShow(item: AnimeScheduleItem): boolean {
 const JIKAN_BASE = "https://api.jikan.moe/v4";
 const ANILIST_BASE = "https://graphql.anilist.co";
 
+let lastSearchTime = 0;
+
 async function jikanFetch<T>(url: string): Promise<T> {
   const res = await fetch(url, {
     headers: { "Accept": "application/json", "User-Agent": "AniStar/1.0" },
@@ -265,9 +267,50 @@ export async function getAllCurrentAnime(): Promise<AnimeScheduleItem[]> {
     }
   }
 
+  const searched = scheduleCache.get("searched");
+  if (searched) {
+    for (const a of searched.data) {
+      if (!seen.has(a.mal_id) && !isKidsShow(a)) {
+        seen.add(a.mal_id);
+        result.push(a);
+      }
+    }
+  }
+
   result.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 
   return result;
+}
+
+export async function searchAndAddAnime(query: string): Promise<AnimeScheduleItem[]> {
+  const now = Date.now();
+  if (now - lastSearchTime < 1000) return [];
+  lastSearchTime = now;
+
+  try {
+    const data = await jikanFetch<{ data: AnimeScheduleItem[] }>(
+      `${JIKAN_BASE}/anime?q=${encodeURIComponent(query)}&limit=5&sfw=true`
+    );
+    const results = (data.data || []).filter((a) => !isKidsShow(a));
+    if (results.length === 0) return [];
+
+    const existing = scheduleCache.get("searched");
+    const existingData = existing?.data ?? [];
+    const seen = new Set(existingData.map((a) => a.mal_id));
+    const merged = [...existingData];
+
+    for (const item of results) {
+      if (!seen.has(item.mal_id)) {
+        merged.push(item);
+        seen.add(item.mal_id);
+      }
+    }
+
+    scheduleCache.set("searched", { data: merged.slice(-200), timestamp: Date.now() });
+    return results;
+  } catch {
+    return [];
+  }
 }
 
 export function clearAnimeCache(): void {

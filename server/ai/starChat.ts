@@ -1,11 +1,11 @@
 import * as https from "https";
-import { getAllCurrentAnime, type AnimeScheduleItem } from "./animeData.js";
+import { getAllCurrentAnime, searchAndAddAnime, type AnimeScheduleItem } from "./animeData.js";
 import {
   extractChatSignals, generateStarResponse, filterByGenres,
   STAR_NAME, STAR_BIO, type ChatSignals,
 } from "./starPersonality.js";
-import { processFeedback, getTopAnimeByGenres } from "./recommendEngine.js";
-import type { AnimeInfo } from "./textEmbedder.js";
+import { processFeedback, getTopAnimeByGenres, addAnimeEmbeddings } from "./recommendEngine.js";
+import { embedAnimeWithFallback, type AnimeInfo } from "./textEmbedder.js";
 import {
   isStarLearningReady,
   embedChatTextWithFallback,
@@ -73,9 +73,18 @@ function httpsPost(url: string, apiKey: string, body: object): Promise<string> {
   });
 }
 
+function extractPotentialTitle(message: string): string | null {
+  const quoted = message.match(/["']([A-Za-z0-9][^"']{2,60})["']/);
+  if (quoted) return quoted[1].trim();
+  const capPhrase = message.match(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b/);
+  if (capPhrase) return capPhrase[1].trim();
+  return null;
+}
+
 async function callGemini(
   userMessage: string,
-  history: ChatMessage[]
+  history: ChatMessage[],
+  searchContext?: string
 ): Promise<string | null> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
@@ -86,7 +95,8 @@ async function callGemini(
     `You have deep knowledge of all anime, not just currently airing shows. ` +
     `When the user mentions a specific anime, discuss it knowledgeably and suggest similar titles. ` +
     `When they ask for recommendations, ask about their preferences first or suggest based on conversation context. ` +
-    `Keep responses conversational and under 150 words.`;
+    `Keep responses conversational and under 150 words.` +
+    (searchContext ? `\n${searchContext}` : "");
 
   const contents = [
     ...history.slice(-6).map((m) => ({
@@ -207,7 +217,35 @@ export async function processChat(
   }
 
   const historyLength = history.length;
-  const geminiResponse = await callGemini(message, history);
+
+  let searchContext: string | undefined;
+  if (signals.mentionedTitles.length === 0) {
+    const potentialTitle = extractPotentialTitle(message);
+    if (potentialTitle) {
+      const searchResults = await searchAndAddAnime(potentialTitle);
+      if (searchResults.length > 0) {
+        const entries: { animeId: number; embedding: number[] }[] = [];
+        for (const anime of searchResults) {
+          try {
+            const embedding = await embedAnimeWithFallback(anime as AnimeInfo);
+            entries.push({ animeId: anime.mal_id, embedding });
+          } catch {
+            // skip
+          }
+        }
+        if (entries.length > 0) {
+          addAnimeEmbeddings("default", entries);
+        }
+        const titles = searchResults.map((a) => {
+          const genres = (a.genres ?? []).map((g) => g.name).join(", ");
+          return `${a.title}${genres ? ` (${genres})` : ""}`;
+        });
+        searchContext = `The user appears to be asking about: ${titles.join("; ")}. These have been added to the recommendation system.`;
+      }
+    }
+  }
+
+  const geminiResponse = await callGemini(message, history, searchContext);
   const response = geminiResponse ?? generateStarResponse(signals, matches, noMatchFallbacks, historyLength);
 
   const implicitFeedback =

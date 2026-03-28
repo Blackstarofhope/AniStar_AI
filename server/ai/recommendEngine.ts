@@ -458,6 +458,21 @@ export function getTopAnimeByGenres(
     .slice(0, limit);
 }
 
+export function addAnimeEmbeddings(
+  userId: string,
+  entries: { animeId: number; embedding: number[] }[]
+): void {
+  const eng = getEngine(userId);
+  const existingIds = new Set(eng.allAnimeEmbeddings.map((e) => e.animeId));
+  for (const entry of entries) {
+    if (!existingIds.has(entry.animeId)) {
+      eng.allAnimeEmbeddings.push(entry);
+      existingIds.add(entry.animeId);
+      if (eng.allAnimeEmbeddings.length > 2000) eng.allAnimeEmbeddings.shift();
+    }
+  }
+}
+
 export function hasRestTrained(userId = "default"): boolean {
   const eng = getEngine(userId);
   return eng.restTrainedAt !== null;
