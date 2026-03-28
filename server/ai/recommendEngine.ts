@@ -69,24 +69,31 @@ interface EngineState {
   restTrainedAt: number | null;
 }
 
-let engine: EngineState | null = null;
+const engines = new Map<string, EngineState>();
+const engineAccessTime = new Map<string, number>();
+const MAX_USER_ENGINES = 50;
+let clipPreloadDone = false;
 
-function initEngine(): EngineState {
-  loadCLIP().catch((e) => console.warn("[CLIP] Failed to preload:", e));
+function initEngine(userId: string): EngineState {
+  if (!clipPreloadDone) {
+    clipPreloadDone = true;
+    loadCLIP().catch((e) => console.warn("[CLIP] Failed to preload:", e));
+  }
 
-  const saved = loadModelState();
-
-  if (saved) {
-    return {
-      network: deserializeNetwork(saved.network),
-      kuramoto: saved.kuramoto,
-      neurogenesis: saved.neurogenesis,
-      ewc: saved.ewc,
-      ratings: saved.ratings || [],
-      allAnimeEmbeddings: saved.allAnimeEmbeddings || [],
-      isTraining: false,
-      restTrainedAt: saved.restTrainedAt ?? null,
-    };
+  if (userId === "default") {
+    const saved = loadModelState();
+    if (saved) {
+      return {
+        network: deserializeNetwork(saved.network),
+        kuramoto: saved.kuramoto,
+        neurogenesis: saved.neurogenesis,
+        ewc: saved.ewc,
+        ratings: saved.ratings || [],
+        allAnimeEmbeddings: saved.allAnimeEmbeddings || [],
+        isTraining: false,
+        restTrainedAt: saved.restTrainedAt ?? null,
+      };
+    }
   }
 
   return {
@@ -101,14 +108,29 @@ function initEngine(): EngineState {
   };
 }
 
-function getEngine(): EngineState {
-  if (!engine) {
-    engine = initEngine();
+function getEngine(userId: string): EngineState {
+  let eng = engines.get(userId);
+  if (!eng) {
+    if (engines.size >= MAX_USER_ENGINES) {
+      let oldestKey = "";
+      let oldestTime = Infinity;
+      for (const [key, t] of engineAccessTime) {
+        if (t < oldestTime) { oldestTime = t; oldestKey = key; }
+      }
+      if (oldestKey) {
+        engines.delete(oldestKey);
+        engineAccessTime.delete(oldestKey);
+      }
+    }
+    eng = initEngine(userId);
+    engines.set(userId, eng);
   }
-  return engine;
+  engineAccessTime.set(userId, Date.now());
+  return eng;
 }
 
-function persistEngine(eng: EngineState): void {
+function persistEngine(userId: string, eng: EngineState): void {
+  if (userId !== "default") return;
   const state: ModelState = {
     version: 2,
     network: deserializeNetwork(serializeNetwork(eng.network) as FFNetworkState),
@@ -186,8 +208,8 @@ async function scoreAnimeList(
   return scored.slice(0, limit);
 }
 
-export async function getRecommendations(limit = 10, deadlineMs = 12000): Promise<Recommendation[]> {
-  const eng = getEngine();
+export async function getRecommendations(userId: string, limit = 10, deadlineMs = 12000): Promise<Recommendation[]> {
+  const eng = getEngine(userId);
   const deadline = Date.now() + deadlineMs;
 
   const partialResults: Recommendation[] = [];
@@ -271,9 +293,10 @@ export async function getRecommendations(limit = 10, deadlineMs = 12000): Promis
 
 export async function processFeedback(
   malId: number,
-  rating: number
+  rating: number,
+  userId = "default"
 ): Promise<{ epoch: number; goodness: number }> {
-  const eng = getEngine();
+  const eng = getEngine(userId);
   eng.isTraining = true;
 
   try {
@@ -351,7 +374,7 @@ export async function processFeedback(
       computeFisher(eng.ewc, eng.network, eng.ratings);
     }
 
-    persistEngine(eng);
+    persistEngine(userId, eng);
 
     return { epoch: eng.network.epoch, goodness: avgGoodness };
   } finally {
@@ -359,8 +382,8 @@ export async function processFeedback(
   }
 }
 
-export function getAIStatus(): AIStatus {
-  const eng = getEngine();
+export function getAIStatus(userId = "default"): AIStatus {
+  const eng = getEngine(userId);
   const stats = getReplayStats(eng.ewc);
   const penalty = ewcPenalty(eng.ewc, eng.network);
   const syncIdx = synchronyIndex(eng.kuramoto);
@@ -408,7 +431,8 @@ export async function verifyAnimeArtwork(
 }
 
 export function resetEngine(): void {
-  engine = null;
+  engines.clear();
+  engineAccessTime.clear();
 }
 
 export function getTopAnimeByGenres(
@@ -424,8 +448,8 @@ export function getTopAnimeByGenres(
     .slice(0, limit);
 }
 
-export function hasRestTrained(): boolean {
-  const eng = getEngine();
+export function hasRestTrained(userId = "default"): boolean {
+  const eng = getEngine(userId);
   return eng.restTrainedAt !== null;
 }
 
@@ -437,8 +461,8 @@ export interface RestTrainResult {
   epoch: number;
 }
 
-export async function restTrain(): Promise<RestTrainResult> {
-  const eng = getEngine();
+export async function restTrain(userId = "default"): Promise<RestTrainResult> {
+  const eng = getEngine(userId);
   const startMs = Date.now();
 
   console.log("[Star] Starting rest training — building base knowledge...");
@@ -510,7 +534,7 @@ export async function restTrain(): Promise<RestTrainResult> {
   updateOrderHistory(eng.kuramoto);
 
   eng.restTrainedAt = Date.now();
-  persistEngine(eng);
+  persistEngine(userId, eng);
 
   const elapsed = Date.now() - startMs;
   console.log(`[Star] Rest training complete: ${trainedCount} anime trained (${highQualityCount} high-quality) in ${elapsed}ms`);

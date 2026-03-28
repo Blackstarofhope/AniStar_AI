@@ -10,6 +10,14 @@ import { processChat, STAR_NAME, STAR_BIO } from "./ai/starChat.js";
 import type { ChatMessage } from "./ai/starChat.js";
 import { initStarLearning, recordChatFeedback } from "./ai/starLearning.js";
 
+function extractUserId(req: Request): string {
+  const raw =
+    (req.query.userId as string | undefined) ||
+    (req.headers["x-user-id"] as string | undefined) ||
+    "default";
+  return raw.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64) || "default";
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/anime/schedule", async (req: Request, res: Response) => {
     const day = (req.query.day as string) || "monday";
@@ -46,8 +54,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/ai/recommend", async (req: Request, res: Response) => {
     const limit = Math.min(25, parseInt((req.query.limit as string) || "5", 10));
+    const userId = extractUserId(req);
     try {
-      const recommendations = await getRecommendations(limit, 12000);
+      const recommendations = await getRecommendations(userId, limit, 12000);
       res.json({ recommendations });
     } catch (e) {
       console.error("[AI] Recommendation error:", e);
@@ -63,8 +72,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (rating < 0 || rating > 1) {
       return res.status(400).json({ error: "rating must be between 0 and 1" });
     }
+    const userId = extractUserId(req);
     try {
-      const result = await processFeedback(malId, rating);
+      const result = await processFeedback(malId, rating, userId);
       res.json({ success: true, ...result });
     } catch (e) {
       console.error("[AI] Feedback error:", e);
@@ -72,9 +82,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/ai/status", (_req: Request, res: Response) => {
+  app.get("/api/ai/status", (req: Request, res: Response) => {
+    const userId = extractUserId(req);
     try {
-      const status = getAIStatus();
+      const status = getAIStatus(userId);
       res.json(status);
     } catch (e) {
       res.status(500).json({ error: "Failed to get AI status" });
@@ -149,12 +160,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/ai/star", (_req: Request, res: Response) => {
-    res.json({ name: STAR_NAME, bio: STAR_BIO, restTrained: hasRestTrained() });
+    res.json({ name: STAR_NAME, bio: STAR_BIO, restTrained: hasRestTrained("default") });
   });
 
-  app.post("/api/ai/rest-train", async (_req: Request, res: Response) => {
+  app.post("/api/ai/rest-train", async (req: Request, res: Response) => {
+    const userId = extractUserId(req);
     try {
-      const result = await restTrain();
+      const result = await restTrain(userId);
       res.json({ success: true, ...result });
     } catch (e) {
       console.error("[Star] Rest training error:", e);
@@ -165,9 +177,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
 
   setTimeout(() => {
-    if (!hasRestTrained()) {
+    if (!hasRestTrained("default")) {
       console.log("[Star] No prior rest training found — starting background base-knowledge pass...");
-      restTrain().catch((e) => console.error("[Star] Auto rest-train failed:", e));
+      restTrain("default").catch((e) => console.error("[Star] Auto rest-train failed:", e));
     }
     initStarLearning().catch((e) => console.error("[Star] Learning init failed:", e));
   }, 5000);
