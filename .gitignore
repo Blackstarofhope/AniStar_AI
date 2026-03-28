@@ -44,3 +44,6 @@ app-example
 
 # AI model state (runtime artifact, not source)
 ai-model-state.json
+
+# Downloaded ONNX model files (large binaries, fetched at runtime)
+models/
