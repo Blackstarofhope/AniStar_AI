@@ -1,4 +1,5 @@
 import { normalize } from "./matrix.js";
+import { encodeText, loadCLIP, CLIP_DIM } from "./clipEncoder.js";
 
 const GENRES = [
   "Action","Adventure","Cars","Comedy","Dementia","Demons","Drama",
@@ -18,7 +19,7 @@ const TOP_STUDIOS = [
   "CloverWorks","PA Works","Brain's Base","Silver Link","Studio Deen"
 ];
 
-export const EMBEDDING_DIM = GENRES.length + 1 + 1 + TOP_STUDIOS.length;
+export const EMBEDDING_DIM = CLIP_DIM;
 
 export interface AnimeInfo {
   mal_id: number;
@@ -220,4 +221,34 @@ export function tfidfWeight(
   if (animeList.length === 0) return embedAnime(targetAnime);
   const ctx = buildTFIDFContext(animeList);
   return tfidfWeightWithContext(ctx, targetAnime);
+}
+
+export async function embedAnimeCLIP(anime: AnimeInfo): Promise<number[]> {
+  await loadCLIP();
+  const genres = (anime.genres || []).map((g) => g.name).join(", ");
+  const studios = (anime.studios || []).map((s) => s.name).join(", ");
+  const synopsis = anime.synopsis ? anime.synopsis.slice(0, 200) : "";
+  const text = [
+    anime.title,
+    genres ? `Genres: ${genres}` : "",
+    studios ? `Studio: ${studios}` : "",
+    synopsis,
+  ]
+    .filter(Boolean)
+    .join(". ");
+  const embedding = await encodeText(text);
+  return Array.from(embedding);
+}
+
+export async function embedAnimeWithFallback(anime: AnimeInfo): Promise<number[]> {
+  try {
+    return await embedAnimeCLIP(anime);
+  } catch {
+    const fallback = embedAnime(anime);
+    const padded = new Array(EMBEDDING_DIM).fill(0);
+    for (let i = 0; i < fallback.length && i < EMBEDDING_DIM; i++) {
+      padded[i] = fallback[i];
+    }
+    return padded;
+  }
 }
