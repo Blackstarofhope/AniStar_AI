@@ -1,5 +1,6 @@
 import { normalize } from "./matrix.js";
 import { encodeText, loadCLIP, CLIP_DIM } from "./clipEncoder.js";
+import { generateVibeProfile } from "./vibeProfiler.js";
 
 const GENRES = [
   "Action","Adventure","Cars","Comedy","Dementia","Demons","Drama",
@@ -250,5 +251,42 @@ export async function embedAnimeWithFallback(anime: AnimeInfo): Promise<number[]
       padded[i] = fallback[i];
     }
     return padded;
+  }
+}
+
+export async function embedAnimeWithVibe(anime: AnimeInfo): Promise<number[]> {
+  const metaEmbedding = await embedAnimeCLIP(anime);
+
+  const genres = (anime.genres ?? []).map((g) => g.name);
+  const synopsis = anime.synopsis ?? "";
+  const score = anime.score ?? 0;
+
+  const vibeProfile = await generateVibeProfile(
+    anime.mal_id,
+    anime.title,
+    genres,
+    synopsis,
+    score
+  );
+
+  if (!vibeProfile) return metaEmbedding;
+
+  await loadCLIP();
+  const vibeRaw = await encodeText(vibeProfile.vibeText);
+  const vibeEmbedding = Array.from(vibeRaw);
+
+  const blended = new Array(EMBEDDING_DIM).fill(0);
+  for (let i = 0; i < EMBEDDING_DIM; i++) {
+    blended[i] = 0.5 * metaEmbedding[i] + 0.5 * vibeEmbedding[i];
+  }
+
+  return normalize(blended);
+}
+
+export async function embedAnimeWithVibeFallback(anime: AnimeInfo): Promise<number[]> {
+  try {
+    return await embedAnimeWithVibe(anime);
+  } catch {
+    return embedAnimeWithFallback(anime);
   }
 }
