@@ -1,4 +1,5 @@
 import * as https from "https";
+import { storage } from "../storage.js";
 import { getAllCurrentAnime, searchAndAddAnime, type AnimeScheduleItem } from "./animeData.js";
 import { generateVibeProfile } from "./vibeProfiler.js";
 import {
@@ -274,7 +275,14 @@ export async function processChat(
         if (entries.length > 0) {
           await addAnimeEmbeddings(userId, entries);
         }
+        // Record discovery attribution for each new anime (fire-and-forget).
+        const displayName = await storage.getDisplayName(userId).catch(() => null) ?? userId;
+        for (const a of searchResults) {
+          storage.recordDiscovery(a.mal_id, userId, displayName).catch(() => {});
+        }
+
         const titles: string[] = [];
+        const attributionLines: string[] = [];
         for (let i = 0; i < searchResults.length; i++) {
           const a = searchResults[i];
           const genres = (a.genres ?? []).map((g) => g.name).join(", ");
@@ -296,8 +304,23 @@ export async function processChat(
             }
           }
           titles.push(entry);
+
+          // Check if this anime was previously discovered by a different user.
+          try {
+            const discovery = await storage.getDiscovery(a.mal_id);
+            if (discovery && discovery.userId !== userId) {
+              attributionLines.push(
+                `${a.title} was discovered for our community by ${discovery.displayName}.`
+              );
+            }
+          } catch {
+            // attribution is best-effort
+          }
         }
         searchContext = `The user appears to be asking about: ${titles.join("; ")}. These have been added to the recommendation system.`;
+        if (attributionLines.length > 0) {
+          searchContext += ` ${attributionLines.join(" ")}`;
+        }
       }
     }
   }

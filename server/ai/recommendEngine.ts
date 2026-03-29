@@ -1,3 +1,4 @@
+import { storage } from "../storage.js";
 import {
   createNetwork, trainStep, applyEWCCorrection, infer, getTotalNeurons, createCorruptedInput,
   deserializeNetwork, serializeNetwork, type FFNetworkState
@@ -44,6 +45,7 @@ export interface Recommendation {
   episodes?: number;
   broadcast?: { day?: string; time?: string };
   vibe?: { atmosphere: string; tone: string; protagonistArchetype: string };
+  discoveredBy?: { userId: string; displayName: string };
 }
 
 export interface AIStatus {
@@ -396,6 +398,20 @@ export async function getRecommendations(userId: string, limit = 10, deadlineMs 
 
     stepKuramoto(eng.kuramoto, 3);
     updateOrderHistory(eng.kuramoto);
+
+    // Attach discovery attribution non-blockingly — failures are silently ignored.
+    const discoveryResults = await Promise.allSettled(
+      recommendations.map((r) => storage.getDiscovery(r.mal_id))
+    );
+    for (let i = 0; i < recommendations.length; i++) {
+      const d = discoveryResults[i];
+      if (d.status === "fulfilled" && d.value) {
+        recommendations[i].discoveredBy = {
+          userId: d.value.userId,
+          displayName: d.value.displayName,
+        };
+      }
+    }
 
     return recommendations;
   };

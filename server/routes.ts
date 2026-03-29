@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
+import { storage } from "./storage.js";
 import {
   getRecommendations, processFeedback, getAIStatus, verifyAnimeArtwork,
   restTrain, hasRestTrained
@@ -195,6 +196,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (e) {
       console.error("[Star] Rest training error:", e);
       res.status(500).json({ error: "Rest training failed" });
+    }
+  });
+
+  app.post("/api/user/displayname", async (req: Request, res: Response) => {
+    const { userId, displayName } = req.body as { userId?: string; displayName?: string };
+    if (typeof userId !== "string" || userId.trim().length === 0) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+    if (typeof displayName !== "string" || displayName.trim().length === 0) {
+      return res.status(400).json({ error: "displayName is required" });
+    }
+    try {
+      await storage.setDisplayName(userId.trim(), displayName.trim());
+      res.json({ success: true });
+    } catch (e) {
+      console.error("[User] setDisplayName error:", e);
+      res.status(500).json({ error: "Failed to set display name" });
+    }
+  });
+
+  app.get("/api/anime/:id/discovery", async (req: Request, res: Response) => {
+    const malId = parseInt(req.params.id, 10);
+    if (isNaN(malId)) {
+      return res.status(400).json({ error: "Invalid anime id" });
+    }
+    try {
+      const discovery = await storage.getDiscovery(malId);
+      if (!discovery) {
+        return res.status(404).json({ error: "No discovery record found" });
+      }
+      res.json(discovery);
+    } catch (e) {
+      console.error("[Anime] getDiscovery error:", e);
+      res.status(500).json({ error: "Failed to get discovery info" });
     }
   });
 
