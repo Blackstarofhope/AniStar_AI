@@ -17,7 +17,7 @@ import {
 } from "./ewc.js";
 import {
   embedAnime, buildUserPreferenceVector,
-  EMBEDDING_DIM, embedAnimeWithFallback, type AnimeInfo
+  EMBEDDING_DIM, embedAnimeWithFallback, embedAnimeWithVibeFallback, type AnimeInfo
 } from "./textEmbedder.js";
 import { loadCLIP } from "./clipEncoder.js";
 import { verifyArtwork, type VerificationResult } from "./visionVerifier.js";
@@ -196,7 +196,7 @@ async function scoreAnimeList(
       try {
         let embedding = embeddingCache.get(anime.mal_id);
         if (!embedding) {
-          embedding = await embedAnimeWithFallback(anime as AnimeInfo);
+          embedding = await embedAnimeWithVibeFallback(anime as AnimeInfo);
           embeddingCache.set(anime.mal_id, embedding);
           eng.allAnimeEmbeddings.push({ animeId: anime.mal_id, embedding });
           if (eng.allAnimeEmbeddings.length > 2000) eng.allAnimeEmbeddings.shift();
@@ -316,7 +316,7 @@ export async function processFeedback(
       const animeList = await getAllCurrentAnime();
       const anime = animeList.find((a) => a.mal_id === malId);
       if (anime) {
-        embedding = await embedAnimeWithFallback(anime as AnimeInfo);
+        embedding = await embedAnimeWithVibeFallback(anime as AnimeInfo);
         eng.allAnimeEmbeddings.push({ animeId: malId, embedding });
       } else {
         const vec = new Array(EMBEDDING_DIM).fill(0.1);
