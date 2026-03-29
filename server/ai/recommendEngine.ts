@@ -4,7 +4,7 @@ import {
 } from "./forwardForward.js";
 import {
   createKuramotoSystem, stepKuramoto, synchronyIndex,
-  updateCouplingFromGoodness, phaseModulatedEmbedding,
+  updateCouplingFromGoodness, phaseModulatedEmbedding, phaseModulatedVibeEmbedding,
   alignVisionPhasesToEmbedding, updateOrderHistory, type KuramotoState
 } from "./kuramoto.js";
 import {
@@ -202,8 +202,10 @@ async function scoreAnimeList(
           if (eng.allAnimeEmbeddings.length > 2000) eng.allAnimeEmbeddings.shift();
         }
 
-        const modulated = phaseModulatedEmbedding(embedding, eng.kuramoto.textPhases);
-        const finalEmbedding = normalize(modulated);
+        const textModulated = phaseModulatedEmbedding(embedding, eng.kuramoto.textPhases);
+        const vibeModulated = phaseModulatedVibeEmbedding(embedding, eng.kuramoto);
+        const blended = textModulated.map((v, i) => (v + vibeModulated[i]) / 2);
+        const finalEmbedding = normalize(blended);
         const ffScore = infer(eng.network, finalEmbedding);
         const cosSim = cosineSim(finalEmbedding, userPref);
         const combinedScore = 0.6 * Math.tanh(ffScore / 5) + 0.4 * (cosSim + 1) / 2;
@@ -324,14 +326,20 @@ export async function processFeedback(
       }
     }
 
-    const modulated = phaseModulatedEmbedding(embedding, eng.kuramoto.textPhases);
-    const finalEmbedding = normalize(modulated);
+    const textModulated = phaseModulatedEmbedding(embedding, eng.kuramoto.textPhases);
+    const vibeModulated = phaseModulatedVibeEmbedding(embedding, eng.kuramoto);
+    const blended = textModulated.map((v, i) => (v + vibeModulated[i]) / 2);
+    const finalEmbedding = normalize(blended);
 
     const replaySamples = sampleReplay(eng.ewc, 4);
     const trainingBatch: { embedding: number[]; rating: number }[] = [
       { embedding: finalEmbedding, rating },
       ...replaySamples.map((r) => ({
-        embedding: normalize(phaseModulatedEmbedding(r.embedding, eng.kuramoto.textPhases)),
+        embedding: (() => {
+          const t = phaseModulatedEmbedding(r.embedding, eng.kuramoto.textPhases);
+          const vb = phaseModulatedVibeEmbedding(r.embedding, eng.kuramoto);
+          return normalize(t.map((v, i) => (v + vb[i]) / 2));
+        })(),
         rating: r.rating,
       })),
     ];
