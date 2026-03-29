@@ -26,6 +26,7 @@ import {
 } from "./modelStore.js";
 import { cosineSim, normalize } from "./matrix.js";
 import { getAllCurrentAnime, type AnimeScheduleItem } from "./animeData.js";
+import { generateVibeProfile } from "./vibeProfiler.js";
 
 const LAYER_SIZES = [EMBEDDING_DIM, 256, 128, 64];
 const KURAMOTO_SIZE = 256;
@@ -41,6 +42,7 @@ export interface Recommendation {
   score?: number;
   episodes?: number;
   broadcast?: { day?: string; time?: string };
+  vibe?: { atmosphere: string; tone: string; protagonistArchetype: string };
 }
 
 export interface AIStatus {
@@ -155,14 +157,35 @@ function persistEngine(userId: string, eng: EngineState): void {
   saveModelState(state);
 }
 
-function buildRecommendationItem(
+async function buildRecommendationItem(
   anime: AnimeScheduleItem,
   score: number,
   verification: { verified: boolean; score: number; visionEmbedding: number[] }
-): Recommendation {
+): Promise<Recommendation> {
   const imageUrl = anime.images?.jpg?.large_image_url || "";
   const artworkBoost = verification.verified ? 1.05 : 0.95;
   const finalConfidence = Math.min(1, Math.max(0, score * artworkBoost));
+
+  let vibe: Recommendation["vibe"] | undefined;
+  try {
+    const profile = await generateVibeProfile(
+      anime.mal_id,
+      anime.title,
+      (anime.genres ?? []).map((g) => g.name),
+      anime.synopsis ?? "",
+      anime.score ?? 0
+    );
+    if (profile) {
+      vibe = {
+        atmosphere: profile.atmosphere,
+        tone: profile.tone,
+        protagonistArchetype: profile.protagonistArchetype,
+      };
+    }
+  } catch {
+    // leave vibe undefined
+  }
+
   return {
     mal_id: anime.mal_id,
     title: anime.title,
@@ -174,6 +197,7 @@ function buildRecommendationItem(
     score: anime.score,
     episodes: anime.episodes,
     broadcast: anime.broadcast,
+    vibe,
   };
 }
 
@@ -237,7 +261,7 @@ export async function getRecommendations(userId: string, limit = 10, deadlineMs 
     const topAnime = await scoreAnimeList(eng, animeList, userPref, limit);
 
     for (const { anime, score } of topAnime) {
-      partialResults.push(buildRecommendationItem(anime, score, UNVERIFIED));
+      partialResults.push(await buildRecommendationItem(anime, score, UNVERIFIED));
     }
 
     const verificationMap = new Map<number, { verified: boolean; score: number; visionEmbedding: number[] }>();
@@ -266,7 +290,7 @@ export async function getRecommendations(userId: string, limit = 10, deadlineMs 
     for (const { anime, score } of topAnime) {
       try {
         const verification = verificationMap.get(anime.mal_id) ?? UNVERIFIED;
-        recommendations.push(buildRecommendationItem(anime, score, verification));
+        recommendations.push(await buildRecommendationItem(anime, score, verification));
       } catch {
         continue;
       }

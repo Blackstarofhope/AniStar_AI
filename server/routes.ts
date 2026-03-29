@@ -6,6 +6,7 @@ import {
 } from "./ai/recommendEngine.js";
 import { getSchedule, getSeasonalAnime, getAnimeDetails } from "./ai/animeData.js";
 import { validateImageUrl } from "./ai/visionVerifier.js";
+import { generateVibeProfile } from "./ai/vibeProfiler.js";
 import { processChat, STAR_NAME, STAR_BIO } from "./ai/starChat.js";
 import type { ChatMessage } from "./ai/starChat.js";
 import { initStarLearning, recordChatFeedback } from "./ai/starLearning.js";
@@ -35,6 +36,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ data });
     } catch (e) {
       res.status(500).json({ error: "Failed to fetch seasonal anime" });
+    }
+  });
+
+  app.get("/api/anime/:id/vibe", async (req: Request, res: Response) => {
+    const malId = parseInt(req.params.id, 10);
+    if (isNaN(malId)) {
+      return res.status(400).json({ error: "Invalid anime ID" });
+    }
+    try {
+      const anime = await getAnimeDetails(malId);
+      if (!anime) return res.status(404).json({ error: "Anime not found" });
+      const vibe = await generateVibeProfile(
+        malId,
+        anime.title,
+        (anime.genres ?? []).map((g) => g.name),
+        anime.synopsis ?? "",
+        anime.score ?? 0
+      );
+      if (!vibe) return res.status(503).json({ error: "Vibe profile generation failed" });
+      res.json(vibe);
+    } catch {
+      res.status(503).json({ error: "Vibe profile generation failed" });
     }
   });
 

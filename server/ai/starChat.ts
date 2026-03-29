@@ -1,5 +1,6 @@
 import * as https from "https";
 import { getAllCurrentAnime, searchAndAddAnime, type AnimeScheduleItem } from "./animeData.js";
+import { generateVibeProfile } from "./vibeProfiler.js";
 import {
   extractChatSignals, generateStarResponse, filterByGenres,
   STAR_NAME, STAR_BIO, type ChatSignals,
@@ -273,10 +274,29 @@ export async function processChat(
         if (entries.length > 0) {
           addAnimeEmbeddings(userId, entries);
         }
-        const titles = searchResults.map((a) => {
+        const titles: string[] = [];
+        for (let i = 0; i < searchResults.length; i++) {
+          const a = searchResults[i];
           const genres = (a.genres ?? []).map((g) => g.name).join(", ");
-          return `${a.title}${genres ? ` (${genres})` : ""}`;
-        });
+          let entry = `${a.title}${genres ? ` (${genres})` : ""}`;
+          if (i < 2) {
+            try {
+              const vibe = await generateVibeProfile(
+                a.mal_id,
+                a.title,
+                (a.genres ?? []).map((g) => g.name),
+                a.synopsis ?? "",
+                a.score ?? 0
+              );
+              if (vibe) {
+                entry += `. Vibe: ${vibe.atmosphere}, ${vibe.pacing}, ${vibe.tone}`;
+              }
+            } catch {
+              // skip vibe on error
+            }
+          }
+          titles.push(entry);
+        }
         searchContext = `The user appears to be asking about: ${titles.join("; ")}. These have been added to the recommendation system.`;
       }
     }
