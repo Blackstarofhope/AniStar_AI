@@ -7,7 +7,17 @@ import {
   type InsertUser, type User,
 } from "@shared/schema";
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
+  max: 5,
+});
+
+pool.on("error", (err) => {
+  console.error("[DB] Idle client error (connection dropped by server):", err.message);
+});
+
 export const db = drizzle(pool);
 
 export interface IStorage {
