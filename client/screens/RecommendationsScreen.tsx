@@ -21,6 +21,7 @@ import { AIStatusModal } from "@/components/AIStatusModal";
 import { StarChat } from "@/components/StarChat";
 import { Colors, Spacing, BorderRadius } from "@/constants/theme";
 import { getApiUrl } from "@/lib/query-client";
+import { useUser } from "@/contexts/UserContext";
 import type { RecsStackParamList } from "@/navigation/types";
 
 type NavProp = NativeStackNavigationProp<RecsStackParamList, "Recommendations">;
@@ -39,8 +40,10 @@ interface Recommendation {
   broadcast?: { day?: string; time?: string };
 }
 
-async function fetchRecommendations(): Promise<Recommendation[]> {
-  const url = new URL("/api/ai/recommend?limit=5", getApiUrl());
+async function fetchRecommendations(userId: string): Promise<Recommendation[]> {
+  const url = new URL("/api/ai/recommend", getApiUrl());
+  url.searchParams.set("limit", "5");
+  url.searchParams.set("userId", userId);
   const res = await fetch(url.toString());
   if (!res.ok) throw new Error("Failed to fetch recommendations");
   const json = (await res.json()) as { recommendations: Recommendation[] };
@@ -199,10 +202,11 @@ export default function RecommendationsScreen() {
   const navigation = useNavigation<NavProp>();
   const headerHeight = useHeaderHeight();
   const [statusVisible, setStatusVisible] = useState(false);
+  const { userId } = useUser();
 
   const { data, isLoading, isError, refetch, isFetching } = useQuery<Recommendation[]>({
-    queryKey: ["/api/ai/recommend"],
-    queryFn: fetchRecommendations,
+    queryKey: ["/api/ai/recommend", userId],
+    queryFn: () => fetchRecommendations(userId),
     staleTime: 2 * 60 * 1000,
     retry: 2,
   });

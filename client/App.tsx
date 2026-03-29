@@ -1,5 +1,5 @@
 import React from "react";
-import { StyleSheet } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
@@ -12,7 +12,27 @@ import { queryClient } from "@/lib/query-client";
 import RootStackNavigator from "@/navigation/RootStackNavigator";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { FavoritesProvider } from "@/contexts/FavoritesContext";
+import { UserProvider, useUser } from "@/contexts/UserContext";
+import ProfileSetupScreen from "@/screens/ProfileSetupScreen";
 import { Colors } from "@/constants/theme";
+
+function AppContent() {
+  const { displayName, isLoading } = useUser();
+
+  if (isLoading) {
+    return <View style={styles.root} />;
+  }
+
+  if (displayName === null) {
+    return <ProfileSetupScreen />;
+  }
+
+  return (
+    <NavigationContainer>
+      <RootStackNavigator />
+    </NavigationContainer>
+  );
+}
 
 export default function App() {
   return (
@@ -21,12 +41,12 @@ export default function App() {
         <SafeAreaProvider>
           <GestureHandlerRootView style={styles.root}>
             <KeyboardProvider>
-              <FavoritesProvider>
-                <NavigationContainer>
-                  <RootStackNavigator />
-                </NavigationContainer>
-                <StatusBar style="light" />
-              </FavoritesProvider>
+              <UserProvider>
+                <FavoritesProvider>
+                  <AppContent />
+                  <StatusBar style="light" />
+                </FavoritesProvider>
+              </UserProvider>
             </KeyboardProvider>
           </GestureHandlerRootView>
         </SafeAreaProvider>

@@ -20,6 +20,7 @@ import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { ThemedText } from "@/components/ThemedText";
 import { Colors, Spacing, BorderRadius } from "@/constants/theme";
 import { getApiUrl } from "@/lib/query-client";
+import { useUser } from "@/contexts/UserContext";
 
 interface Message {
   id: string;
@@ -38,9 +39,11 @@ interface StarChatProps {
 
 async function postChat(
   message: string,
-  history: ChatHistoryItem[]
+  history: ChatHistoryItem[],
+  userId: string
 ): Promise<{ response: string; implicitFeedback: boolean }> {
   const url = new URL("/api/ai/chat", getApiUrl());
+  url.searchParams.set("userId", userId);
   const res = await fetch(url.toString(), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -112,6 +115,7 @@ const STAR_WELCOME =
 
 export function StarChat({ initialMessage }: StarChatProps) {
   const tabBarHeight = useBottomTabBarHeight();
+  const { userId } = useUser();
 
   const [messages, setMessages] = useState<Message[]>([
     { id: "welcome", role: "star", content: initialMessage ?? STAR_WELCOME },
@@ -145,7 +149,7 @@ export function StarChat({ initialMessage }: StarChatProps) {
       .map((m) => ({ role: m.role, content: m.content }));
 
     try {
-      const data = await postChat(text, historyForApi);
+      const data = await postChat(text, historyForApi, userId);
       setMessages((prev) => [
         ...prev,
         { id: `s-${Date.now()}`, role: "star", content: data.response },

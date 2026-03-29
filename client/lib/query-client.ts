@@ -1,4 +1,5 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { getCurrentUserId } from "@/lib/userState";
 
 /**
  * Gets the base URL for the Express API server (e.g., "http://localhost:3000")
@@ -30,6 +31,7 @@ export async function apiRequest(
 ): Promise<Response> {
   const baseUrl = getApiUrl();
   const url = new URL(route, baseUrl);
+  url.searchParams.set("userId", getCurrentUserId());
 
   const res = await fetch(url, {
     method,
@@ -50,6 +52,7 @@ export const getQueryFn: <T>(options: {
   async ({ queryKey }) => {
     const baseUrl = getApiUrl();
     const url = new URL(queryKey.join("/") as string, baseUrl);
+    url.searchParams.set("userId", getCurrentUserId());
 
     const res = await fetch(url, {
       credentials: "include",

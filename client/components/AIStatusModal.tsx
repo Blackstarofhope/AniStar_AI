@@ -7,6 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ThemedText } from "@/components/ThemedText";
 import { Colors, Spacing, BorderRadius } from "@/constants/theme";
 import { getApiUrl } from "@/lib/query-client";
+import { useUser } from "@/contexts/UserContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 interface AIStatusModalProps {
@@ -28,8 +29,9 @@ interface AIStatus {
   couplingStrength: number;
 }
 
-async function fetchAIStatus(): Promise<AIStatus> {
+async function fetchAIStatus(userId: string): Promise<AIStatus> {
   const url = new URL("/api/ai/status", getApiUrl());
+  url.searchParams.set("userId", userId);
   const res = await fetch(url.toString());
   if (!res.ok) throw new Error("Failed to fetch AI status");
   return res.json();
@@ -187,10 +189,11 @@ const progressStyles = StyleSheet.create({
 
 export function AIStatusModal({ visible, onClose }: AIStatusModalProps) {
   const insets = useSafeAreaInsets();
+  const { userId } = useUser();
 
   const { data: status, isLoading, isError, refetch } = useQuery<AIStatus>({
-    queryKey: ["/api/ai/status"],
-    queryFn: fetchAIStatus,
+    queryKey: ["/api/ai/status", userId],
+    queryFn: () => fetchAIStatus(userId),
     refetchInterval: visible ? 5000 : false,
     enabled: visible,
   });
