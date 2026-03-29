@@ -4,7 +4,7 @@ import {
   getRecommendations, processFeedback, getAIStatus, verifyAnimeArtwork,
   restTrain, hasRestTrained
 } from "./ai/recommendEngine.js";
-import { getSchedule, getSeasonalAnime, getAnimeDetails } from "./ai/animeData.js";
+import { getSchedule, getSeasonalAnime, getAnimeDetails, initAnimeData } from "./ai/animeData.js";
 import { validateImageUrl } from "./ai/visionVerifier.js";
 import { generateVibeProfile } from "./ai/vibeProfiler.js";
 import { processChat, STAR_NAME, STAR_BIO } from "./ai/starChat.js";
@@ -105,10 +105,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/ai/status", (req: Request, res: Response) => {
+  app.get("/api/ai/status", async (req: Request, res: Response) => {
     const userId = extractUserId(req);
     try {
-      const status = getAIStatus(userId);
+      const status = await getAIStatus(userId);
       res.json(status);
     } catch (e) {
       res.status(500).json({ error: "Failed to get AI status" });
@@ -183,8 +183,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/ai/star", (_req: Request, res: Response) => {
-    res.json({ name: STAR_NAME, bio: STAR_BIO, restTrained: hasRestTrained("default") });
+  app.get("/api/ai/star", async (_req: Request, res: Response) => {
+    res.json({ name: STAR_NAME, bio: STAR_BIO, restTrained: await hasRestTrained("default") });
   });
 
   app.post("/api/ai/rest-train", async (req: Request, res: Response) => {
@@ -200,11 +200,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   const httpServer = createServer(app);
 
+  initAnimeData().catch((e) => console.error("[AnimeData] Init failed:", e));
+
   setTimeout(() => {
-    if (!hasRestTrained("default")) {
-      console.log("[Star] No prior rest training found — starting background base-knowledge pass...");
-      restTrain("default").catch((e) => console.error("[Star] Auto rest-train failed:", e));
-    }
+    hasRestTrained("default").then((trained) => {
+      if (!trained) {
+        console.log("[Star] No prior rest training found — starting background base-knowledge pass...");
+        restTrain("default").catch((e) => console.error("[Star] Auto rest-train failed:", e));
+      }
+    }).catch(() => {});
     initStarLearning().catch((e) => console.error("[Star] Learning init failed:", e));
   }, 5000);
 

@@ -27,6 +27,7 @@ import {
 import { cosineSim, normalize } from "./matrix.js";
 import { getAllCurrentAnime, type AnimeScheduleItem } from "./animeData.js";
 import { generateVibeProfile, getVibeProfileFromCache } from "./vibeProfiler.js";
+import { storage } from "../storage.js";
 
 const LAYER_SIZES = [EMBEDDING_DIM, 256, 128, 64];
 const KURAMOTO_SIZE = 256;
@@ -72,25 +73,24 @@ interface EngineState {
 
 const engines = new Map<string, EngineState>();
 const engineAccessTime = new Map<string, number>();
-const MAX_USER_ENGINES = 50;
+const engineInitPromises = new Map<string, Promise<EngineState>>();
+const MAX_USER_ENGINES = 5;
+const INACTIVITY_MS = 5 * 60 * 1000; // 5 minutes
 let clipPreloadDone = false;
 
-function initEngine(userId: string): EngineState {
+async function initEngine(userId: string): Promise<EngineState> {
   if (!clipPreloadDone) {
     clipPreloadDone = true;
     loadCLIP().catch((e) => console.warn("[CLIP] Failed to preload:", e));
   }
 
+  // For "default": try file-based first for backward compatibility
   if (userId === "default") {
     const saved = loadModelState();
     if (saved) {
       const firstHiddenSize = saved.network.layers[0]?.biases?.length ?? 0;
       const expectedHiddenSize = LAYER_SIZES[1];
-      if (firstHiddenSize !== expectedHiddenSize) {
-        console.log(
-          `[AI] Saved network dim mismatch (firstHidden=${firstHiddenSize} vs expected ${expectedHiddenSize}) — starting fresh.`
-        );
-      } else {
+      if (firstHiddenSize === expectedHiddenSize) {
         const validEmbeddings = (saved.allAnimeEmbeddings || []).filter(
           (e) => e.embedding.length === EMBEDDING_DIM
         );
@@ -111,8 +111,54 @@ function initEngine(userId: string): EngineState {
           isTraining: false,
           restTrainedAt: saved.restTrainedAt ?? null,
         };
+      } else {
+        console.log(
+          `[AI] Saved network dim mismatch (firstHidden=${firstHiddenSize} vs expected ${LAYER_SIZES[1]}) — trying DB.`
+        );
       }
     }
+  }
+
+  // Try DB for all users
+  try {
+    const dbState = await storage.loadEngineState(userId);
+    if (dbState) {
+      const s = dbState as {
+        network: FFNetworkState;
+        kuramoto: KuramotoState;
+        neurogenesis: NeurogenesisState;
+        ewc: EWCState;
+        ratings: { animeId: number; embedding: number[]; rating: number; timestamp: number }[];
+        allAnimeEmbeddings: { animeId: number; embedding: number[] }[];
+        restTrainedAt?: number | null;
+      };
+      const firstHiddenSize = s.network?.layers?.[0]?.biases?.length ?? 0;
+      if (firstHiddenSize === LAYER_SIZES[1]) {
+        const kura = s.kuramoto;
+        if (!kura.vibePhases || kura.vibePhases.length !== kura.textPhases.length) {
+          kura.vibePhases = Array.from(
+            { length: kura.textPhases.length },
+            () => Math.random() * 2 * Math.PI
+          );
+        }
+        const validEmbeddings = (s.allAnimeEmbeddings || []).filter(
+          (e) => e.embedding.length === EMBEDDING_DIM
+        );
+        console.log(`[AI] Loaded engine for user "${userId}" from DB.`);
+        return {
+          network: deserializeNetwork(s.network),
+          kuramoto: kura,
+          neurogenesis: s.neurogenesis,
+          ewc: s.ewc,
+          ratings: s.ratings || [],
+          allAnimeEmbeddings: validEmbeddings,
+          isTraining: false,
+          restTrainedAt: s.restTrainedAt ?? null,
+        };
+      }
+    }
+  } catch (e) {
+    console.warn(`[AI] Failed to load engine from DB for "${userId}":`, e instanceof Error ? e.message : e);
   }
 
   return {
@@ -127,42 +173,86 @@ function initEngine(userId: string): EngineState {
   };
 }
 
-function getEngine(userId: string): EngineState {
-  let eng = engines.get(userId);
-  if (!eng) {
-    if (engines.size >= MAX_USER_ENGINES) {
-      let oldestKey = "";
-      let oldestTime = Infinity;
-      for (const [key, t] of engineAccessTime) {
-        if (t < oldestTime) { oldestTime = t; oldestKey = key; }
-      }
-      if (oldestKey) {
-        engines.delete(oldestKey);
-        engineAccessTime.delete(oldestKey);
-      }
-    }
-    eng = initEngine(userId);
-    engines.set(userId, eng);
+async function getEngine(userId: string): Promise<EngineState> {
+  const existing = engines.get(userId);
+  if (existing) {
+    engineAccessTime.set(userId, Date.now());
+    return existing;
   }
+
+  let initPromise = engineInitPromises.get(userId);
+  if (!initPromise) {
+    initPromise = (async () => {
+      if (engines.size >= MAX_USER_ENGINES) {
+        let oldestKey = "";
+        let oldestTime = Infinity;
+        for (const [key, t] of engineAccessTime) {
+          if (t < oldestTime) { oldestTime = t; oldestKey = key; }
+        }
+        if (oldestKey) {
+          const evicted = engines.get(oldestKey);
+          if (evicted) persistEngine(oldestKey, evicted).catch(() => {});
+          engines.delete(oldestKey);
+          engineAccessTime.delete(oldestKey);
+        }
+      }
+      const eng = await initEngine(userId);
+      engines.set(userId, eng);
+      return eng;
+    })();
+    engineInitPromises.set(userId, initPromise);
+    initPromise.finally(() => engineInitPromises.delete(userId));
+  }
+
   engineAccessTime.set(userId, Date.now());
-  return eng;
+  return initPromise;
 }
 
-function persistEngine(userId: string, eng: EngineState): void {
-  if (userId !== "default") return;
-  const state: ModelState = {
+async function persistEngine(userId: string, eng: EngineState): Promise<void> {
+  const json = {
     version: 2,
-    network: deserializeNetwork(serializeNetwork(eng.network) as FFNetworkState),
+    network: serializeNetwork(eng.network),
     kuramoto: eng.kuramoto,
     neurogenesis: eng.neurogenesis,
     ewc: eng.ewc,
     ratings: eng.ratings,
     allAnimeEmbeddings: eng.allAnimeEmbeddings,
-    restTrainedAt: eng.restTrainedAt ?? undefined,
-    savedAt: new Date().toISOString(),
+    restTrainedAt: eng.restTrainedAt ?? null,
   };
-  saveModelState(state);
+
+  storage.saveEngineState(userId, json).catch((e) =>
+    console.warn(`[AI] Failed to save engine state to DB for "${userId}":`, e instanceof Error ? e.message : e)
+  );
+
+  // For "default", also keep file-based for backward compatibility
+  if (userId === "default") {
+    const state: ModelState = {
+      version: 2,
+      network: deserializeNetwork(serializeNetwork(eng.network) as FFNetworkState),
+      kuramoto: eng.kuramoto,
+      neurogenesis: eng.neurogenesis,
+      ewc: eng.ewc,
+      ratings: eng.ratings,
+      allAnimeEmbeddings: eng.allAnimeEmbeddings,
+      restTrainedAt: eng.restTrainedAt ?? undefined,
+      savedAt: new Date().toISOString(),
+    };
+    saveModelState(state);
+  }
 }
+
+// Inactivity eviction: persist and remove engines idle for > 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, lastAccess] of engineAccessTime) {
+    if (now - lastAccess > INACTIVITY_MS) {
+      const eng = engines.get(userId);
+      if (eng) persistEngine(userId, eng).catch(() => {});
+      engines.delete(userId);
+      engineAccessTime.delete(userId);
+    }
+  }
+}, 60_000).unref();
 
 function buildRecommendationItem(
   anime: AnimeScheduleItem,
@@ -253,7 +343,7 @@ async function scoreAnimeList(
 }
 
 export async function getRecommendations(userId: string, limit = 10, deadlineMs = 12000): Promise<Recommendation[]> {
-  const eng = getEngine(userId);
+  const eng = await getEngine(userId);
   const deadline = Date.now() + deadlineMs;
 
   const partialResults: Recommendation[] = [];
@@ -340,7 +430,7 @@ export async function processFeedback(
   rating: number,
   userId = "default"
 ): Promise<{ epoch: number; goodness: number }> {
-  const eng = getEngine(userId);
+  const eng = await getEngine(userId);
   eng.isTraining = true;
 
   try {
@@ -424,7 +514,7 @@ export async function processFeedback(
       computeFisher(eng.ewc, eng.network, eng.ratings);
     }
 
-    persistEngine(userId, eng);
+    await persistEngine(userId, eng);
 
     return { epoch: eng.network.epoch, goodness: avgGoodness };
   } finally {
@@ -432,8 +522,8 @@ export async function processFeedback(
   }
 }
 
-export function getAIStatus(userId = "default"): AIStatus {
-  const eng = getEngine(userId);
+export async function getAIStatus(userId = "default"): Promise<AIStatus> {
+  const eng = await getEngine(userId);
   const stats = getReplayStats(eng.ewc);
   const penalty = ewcPenalty(eng.ewc, eng.network);
   const syncIdx = synchronyIndex(eng.kuramoto);
@@ -498,11 +588,11 @@ export function getTopAnimeByGenres(
     .slice(0, limit);
 }
 
-export function addAnimeEmbeddings(
+export async function addAnimeEmbeddings(
   userId: string,
   entries: { animeId: number; embedding: number[] }[]
-): void {
-  const eng = getEngine(userId);
+): Promise<void> {
+  const eng = await getEngine(userId);
   const existingIds = new Set(eng.allAnimeEmbeddings.map((e) => e.animeId));
   for (const entry of entries) {
     if (!existingIds.has(entry.animeId)) {
@@ -513,8 +603,8 @@ export function addAnimeEmbeddings(
   }
 }
 
-export function hasRestTrained(userId = "default"): boolean {
-  const eng = getEngine(userId);
+export async function hasRestTrained(userId = "default"): Promise<boolean> {
+  const eng = await getEngine(userId);
   return eng.restTrainedAt !== null;
 }
 
@@ -527,7 +617,7 @@ export interface RestTrainResult {
 }
 
 export async function restTrain(userId = "default"): Promise<RestTrainResult> {
-  const eng = getEngine(userId);
+  const eng = await getEngine(userId);
   const startMs = Date.now();
 
   console.log("[Star] Starting rest training — building base knowledge...");
@@ -598,7 +688,7 @@ export async function restTrain(userId = "default"): Promise<RestTrainResult> {
   updateOrderHistory(eng.kuramoto);
 
   eng.restTrainedAt = Date.now();
-  persistEngine(userId, eng);
+  await persistEngine(userId, eng);
 
   const elapsed = Date.now() - startMs;
   console.log(`[Star] Rest training complete: ${trainedCount} anime trained (${highQualityCount} high-quality) in ${elapsed}ms`);

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, real, serial, timestamp, jsonb, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -9,6 +9,47 @@ export const users = pgTable("users", {
     .default(sql`gen_random_uuid()`),
   username: text("username").notNull().unique(),
   password: text("password").notNull(),
+});
+
+export const userEngineState = pgTable("user_engine_state", {
+  userId: text("user_id").primaryKey(),
+  engineJson: jsonb("engine_json").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const animeSearched = pgTable("anime_searched", {
+  malId: integer("mal_id").primaryKey(),
+  data: jsonb("data").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const vibeProfiles = pgTable("vibe_profiles", {
+  malId: integer("mal_id").primaryKey(),
+  profile: jsonb("profile").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const userRatings = pgTable("user_ratings", {
+  id: serial("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  malId: integer("mal_id").notNull(),
+  rating: real("rating").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  userMalUnique: unique("user_ratings_user_mal_unique").on(t.userId, t.malId),
+}));
+
+export const animeDiscovery = pgTable("anime_discovery", {
+  malId: integer("mal_id").primaryKey(),
+  discoveredByUserId: text("discovered_by_user_id").notNull(),
+  discoveredByDisplayName: text("discovered_by_display_name").notNull(),
+  discoveredAt: timestamp("discovered_at").defaultNow().notNull(),
+});
+
+export const userProfiles = pgTable("user_profiles", {
+  userId: text("user_id").primaryKey(),
+  displayName: text("display_name").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export const insertUserSchema = createInsertSchema(users).pick({

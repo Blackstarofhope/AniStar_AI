@@ -1,3 +1,5 @@
+import { storage } from "../storage.js";
+
 export interface AnimeScheduleItem {
   mal_id: number;
   title: string;
@@ -303,6 +305,9 @@ export async function searchAndAddAnime(query: string): Promise<AnimeScheduleIte
       if (!seen.has(item.mal_id)) {
         merged.push(item);
         seen.add(item.mal_id);
+        storage.saveSearchedAnime(item.mal_id, item as unknown as object).catch((e) => {
+          console.warn("[AnimeData] Failed to persist searched anime:", e instanceof Error ? e.message : e);
+        });
       }
     }
 
@@ -310,6 +315,31 @@ export async function searchAndAddAnime(query: string): Promise<AnimeScheduleIte
     return results;
   } catch {
     return [];
+  }
+}
+
+export async function initAnimeData(): Promise<void> {
+  try {
+    const rows = await storage.getAllSearchedAnime();
+    if (rows.length === 0) return;
+
+    const items = rows.map((r) => r.data as AnimeScheduleItem).filter((a) => a && a.mal_id);
+    const existing = scheduleCache.get("searched");
+    const existingData = existing?.data ?? [];
+    const seen = new Set(existingData.map((a) => a.mal_id));
+    const merged = [...existingData];
+
+    for (const item of items) {
+      if (!seen.has(item.mal_id) && !isKidsShow(item)) {
+        merged.push(item);
+        seen.add(item.mal_id);
+      }
+    }
+
+    scheduleCache.set("searched", { data: merged.slice(-200), timestamp: Date.now() });
+    console.log(`[AnimeData] Loaded ${items.length} searched anime from DB.`);
+  } catch (e) {
+    console.warn("[AnimeData] Failed to load searched anime from DB:", e instanceof Error ? e.message : e);
   }
 }
 

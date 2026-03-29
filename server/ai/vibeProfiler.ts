@@ -1,13 +1,10 @@
 import * as https from "https";
-import * as fs from "fs";
-import * as path from "path";
+import { storage } from "../storage.js";
 
 const GEMINI_MODEL = "gemini-2.0-flash";
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
-const CACHE_FILE = path.resolve("vibe-profiles-cache.json");
 const CACHE_MAX = 500;
-const PERSIST_EVERY = 10;
 const RATE_LIMIT_MS = 500;
 
 export interface VibeProfile {
@@ -21,38 +18,26 @@ export interface VibeProfile {
 }
 
 // ---------------------------------------------------------------------------
-// In-memory cache
+// In-memory cache + lazy DB load
 // ---------------------------------------------------------------------------
 
 const vibeCache = new Map<number, VibeProfile>();
-let cacheLoaded = false;
-let newProfilesSinceLastSave = 0;
+let dbLoadPromise: Promise<void> | null = null;
 let lastGeminiCallTime = 0;
 
-function loadCache(): void {
-  if (cacheLoaded) return;
-  cacheLoaded = true;
-  try {
-    if (fs.existsSync(CACHE_FILE)) {
-      const raw = fs.readFileSync(CACHE_FILE, "utf-8");
-      const entries = JSON.parse(raw) as [number, VibeProfile][];
-      for (const [id, profile] of entries) {
-        vibeCache.set(id, profile);
+function ensureDbLoaded(): Promise<void> {
+  if (!dbLoadPromise) {
+    dbLoadPromise = storage.getAllVibeProfiles().then((rows) => {
+      for (const { malId, profile } of rows) {
+        vibeCache.set(malId, profile as VibeProfile);
       }
-      console.log(`[VibeProfiler] Loaded ${vibeCache.size} cached profiles.`);
-    }
-  } catch {
-    // Start fresh if file is corrupted
+      console.log(`[VibeProfiler] Loaded ${vibeCache.size} cached profiles from DB.`);
+    }).catch((e) => {
+      console.warn("[VibeProfiler] Failed to load profiles from DB:", e instanceof Error ? e.message : e);
+      dbLoadPromise = null;
+    });
   }
-}
-
-function persistCache(): void {
-  try {
-    const entries = Array.from(vibeCache.entries());
-    fs.writeFileSync(CACHE_FILE, JSON.stringify(entries), "utf-8");
-  } catch (e) {
-    console.warn("[VibeProfiler] Failed to persist cache:", e instanceof Error ? e.message : e);
-  }
+  return dbLoadPromise;
 }
 
 function evictIfNeeded(): void {
@@ -62,7 +47,7 @@ function evictIfNeeded(): void {
 }
 
 // ---------------------------------------------------------------------------
-// HTTPS helper (same pattern as starChat.ts)
+// HTTPS helper
 // ---------------------------------------------------------------------------
 
 function httpsPost(url: string, apiKey: string, body: object): Promise<string> {
@@ -108,14 +93,13 @@ export async function generateVibeProfile(
   synopsis: string,
   score: number
 ): Promise<VibeProfile | null> {
-  loadCache();
+  await ensureDbLoaded();
 
   if (vibeCache.has(malId)) return vibeCache.get(malId)!;
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
 
-  // Rate limit: max 1 call per 500ms
   const now = Date.now();
   const elapsed = now - lastGeminiCallTime;
   if (elapsed < RATE_LIMIT_MS) {
@@ -157,7 +141,6 @@ export async function generateVibeProfile(
     const text = responsePart?.text?.trim();
     if (!text) return null;
 
-    // Strip any accidental markdown fences
     const jsonText = text.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/, "").trim();
     const json = JSON.parse(jsonText) as Record<string, string>;
 
@@ -190,11 +173,9 @@ export async function generateVibeProfile(
     evictIfNeeded();
     vibeCache.set(malId, profile);
 
-    newProfilesSinceLastSave++;
-    if (newProfilesSinceLastSave >= PERSIST_EVERY) {
-      newProfilesSinceLastSave = 0;
-      persistCache();
-    }
+    storage.saveVibeProfile(malId, profile).catch((e) => {
+      console.warn("[VibeProfiler] Failed to persist profile to DB:", e instanceof Error ? e.message : e);
+    });
 
     return profile;
   } catch (e) {
@@ -204,6 +185,5 @@ export async function generateVibeProfile(
 }
 
 export function getVibeProfileFromCache(malId: number): VibeProfile | null {
-  loadCache();
   return vibeCache.get(malId) ?? null;
 }

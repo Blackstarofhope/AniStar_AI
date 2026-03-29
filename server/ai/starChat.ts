@@ -272,7 +272,7 @@ export async function processChat(
           }
         }
         if (entries.length > 0) {
-          addAnimeEmbeddings(userId, entries);
+          await addAnimeEmbeddings(userId, entries);
         }
         const titles: string[] = [];
         for (let i = 0; i < searchResults.length; i++) {

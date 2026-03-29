@@ -1,0 +1,27 @@
+Expand the database schema and persist all AI state to PostgreSQL. Here are the changes:
+
+1. In shared/schema.ts, add these tables:
+   - userEngineState: userId (primary key, text), engineJson (jsonb), updatedAt (timestamp, default now)
+   - animeSearched: malId (primary key, integer), data (jsonb), createdAt (timestamp, default now)
+   - vibeProfiles: malId (primary key, integer), profile (jsonb), createdAt (timestamp, default now)
+   - userRatings: id (serial primary key), userId (text), malId (integer), rating (real), createdAt (timestamp, default now), unique constraint on (userId, malId)
+   - animeDiscovery: malId (integer, primary key), discoveredByUserId (text not null), discoveredByDisplayName (text not null), discoveredAt (timestamp, default now)
+   - userProfiles: userId (text, primary key), displayName (text not null), createdAt (timestamp, default now)
+
+2. In server/storage.ts, replace MemStorage with a real PostgreSQL implementation using drizzle-orm. Connect using process.env.DATABASE_URL. Add methods: saveEngineState(userId, json), loadEngineState(userId), saveSearchedAnime(malId, data), getAllSearchedAnime(), saveVibeProfile(malId, profile), getVibeProfile(malId), getAllVibeProfiles(), saveRating(userId, malId, rating), getUserRatings(userId), recordDiscovery(malId, userId, displayName), getDiscovery(malId), setDisplayName(userId, displayName), getDisplayName(userId).
+
+3. In server/ai/recommendEngine.ts, make these memory management changes:
+   - Reduce MAX_USER_ENGINES from 50 to 5
+   - Update persistEngine to call storage.saveEngineState for ALL users, not just "default"
+   - Update initEngine to call storage.loadEngineState for ALL users, not just "default"
+   - When evicting a user from the in-memory Map due to LRU, call persistEngine BEFORE deleting them from memory
+   - Add an inactivity timeout: use setInterval to check every 60 seconds, and if a user hasn't made a request in 5 minutes, persist and evict their engine from memory
+   - On every processFeedback call, persist to database for all users
+
+4. In server/ai/animeData.ts, update searchAndAddAnime to also call storage.saveSearchedAnime for each result. On server startup, load all searched anime from database into the scheduleCache "searched" slot.
+
+5. In server/ai/vibeProfiler.ts, replace the file-based cache (vibe-profiles-cache.json) with storage.saveVibeProfile and storage.getVibeProfile. On first access, load all profiles from database into the in-memory vibeCache. Delete the file-based persistence code entirely.
+
+6. Run drizzle-kit push to create the tables.
+
+Do not modify any client files.
