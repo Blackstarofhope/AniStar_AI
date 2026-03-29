@@ -1,0 +1,27 @@
+Create a new file server/ai/vibeProfiler.ts that uses Gemini to generate rich anime profiles. Here is the full specification:
+
+1. Import the Gemini API key from process.env.GEMINI_API_KEY. Use the same https POST approach as starChat.ts to call https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent
+
+2. Define an exported interface VibeProfile with these fields:
+   - atmosphere: string (e.g. "rain-soaked dystopia, oppressive but beautiful")
+   - pacing: string (e.g. "slow burn with explosive climaxes")
+   - tone: string (e.g. "optimistic despite dark world-building")
+   - protagonistArchetype: string (e.g. "relentless underdog with hidden power")
+   - relationshipDynamics: string (e.g. "found-family, rivalry-driven growth")
+   - emotionalArc: string (e.g. "zero-to-hero redemption")
+   - vibeText: string (a concatenation of all above fields into one paragraph for CLIP embedding)
+
+3. Create an exported async function "generateVibeProfile" that takes an anime title, genres string[], synopsis string, and score number, and returns Promise<VibeProfile | null>. It should:
+   - Call Gemini with this system prompt: "You are an anime analyst. Given an anime's details, generate a JSON object describing its vibe profile. Respond with ONLY valid JSON, no markdown backticks. The JSON must have these exact keys: atmosphere (the visual/emotional setting feel in 5-10 words), pacing (the narrative rhythm in 5-10 words), tone (the overall emotional tone in 5-10 words), protagonistArchetype (the main character type in 5-10 words), relationshipDynamics (how characters relate in 5-10 words), emotionalArc (the story's emotional journey in 5-10 words)."
+   - The user message should be: "Anime: {title}. Genres: {genres}. Score: {score}/10. Synopsis: {first 300 chars of synopsis}"
+   - Set maxOutputTokens to 300, temperature to 0.3
+   - Parse the JSON response, construct the vibeText by concatenating all fields into a natural sentence, and return the VibeProfile
+   - If anything fails, return null
+
+4. Add an in-memory cache: Map<number, VibeProfile> keyed by mal_id, capped at 500 entries. Check cache before calling Gemini.
+
+5. Add a file-based persistence layer: save the cache to "vibe-profiles-cache.json" after every 10 new profiles generated. Load from file on first access.
+
+6. Add rate limiting: maximum 1 Gemini call per 500ms for vibe profiling to avoid hitting API limits.
+
+Do not modify any other files.
