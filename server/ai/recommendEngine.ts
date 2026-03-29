@@ -26,7 +26,7 @@ import {
 } from "./modelStore.js";
 import { cosineSim, normalize } from "./matrix.js";
 import { getAllCurrentAnime, type AnimeScheduleItem } from "./animeData.js";
-import { generateVibeProfile } from "./vibeProfiler.js";
+import { generateVibeProfile, getVibeProfileFromCache } from "./vibeProfiler.js";
 
 const LAYER_SIZES = [EMBEDDING_DIM, 256, 128, 64];
 const KURAMOTO_SIZE = 256;
@@ -94,9 +94,16 @@ function initEngine(userId: string): EngineState {
         const validEmbeddings = (saved.allAnimeEmbeddings || []).filter(
           (e) => e.embedding.length === EMBEDDING_DIM
         );
+        const kura = saved.kuramoto;
+        if (!kura.vibePhases || kura.vibePhases.length !== kura.textPhases.length) {
+          kura.vibePhases = Array.from(
+            { length: kura.textPhases.length },
+            () => Math.random() * 2 * Math.PI
+          );
+        }
         return {
           network: deserializeNetwork(saved.network),
-          kuramoto: saved.kuramoto,
+          kuramoto: kura,
           neurogenesis: saved.neurogenesis,
           ewc: saved.ewc,
           ratings: saved.ratings || [],
@@ -157,33 +164,34 @@ function persistEngine(userId: string, eng: EngineState): void {
   saveModelState(state);
 }
 
-async function buildRecommendationItem(
+function buildRecommendationItem(
   anime: AnimeScheduleItem,
   score: number,
   verification: { verified: boolean; score: number; visionEmbedding: number[] }
-): Promise<Recommendation> {
+): Recommendation {
   const imageUrl = anime.images?.jpg?.large_image_url || "";
   const artworkBoost = verification.verified ? 1.05 : 0.95;
   const finalConfidence = Math.min(1, Math.max(0, score * artworkBoost));
 
+  // Use cache-only — never block the response on a Gemini call.
+  // If the profile is not yet cached, fire a background prefetch so the
+  // next request will find it in the cache.
+  const cachedProfile = getVibeProfileFromCache(anime.mal_id);
   let vibe: Recommendation["vibe"] | undefined;
-  try {
-    const profile = await generateVibeProfile(
+  if (cachedProfile) {
+    vibe = {
+      atmosphere: cachedProfile.atmosphere,
+      tone: cachedProfile.tone,
+      protagonistArchetype: cachedProfile.protagonistArchetype,
+    };
+  } else {
+    generateVibeProfile(
       anime.mal_id,
       anime.title,
       (anime.genres ?? []).map((g) => g.name),
       anime.synopsis ?? "",
       anime.score ?? 0
-    );
-    if (profile) {
-      vibe = {
-        atmosphere: profile.atmosphere,
-        tone: profile.tone,
-        protagonistArchetype: profile.protagonistArchetype,
-      };
-    }
-  } catch {
-    // leave vibe undefined
+    ).catch(() => { /* background prefetch — ignore errors */ });
   }
 
   return {
@@ -261,7 +269,7 @@ export async function getRecommendations(userId: string, limit = 10, deadlineMs 
     const topAnime = await scoreAnimeList(eng, animeList, userPref, limit);
 
     for (const { anime, score } of topAnime) {
-      partialResults.push(await buildRecommendationItem(anime, score, UNVERIFIED));
+      partialResults.push(buildRecommendationItem(anime, score, UNVERIFIED));
     }
 
     const verificationMap = new Map<number, { verified: boolean; score: number; visionEmbedding: number[] }>();
@@ -290,7 +298,7 @@ export async function getRecommendations(userId: string, limit = 10, deadlineMs 
     for (const { anime, score } of topAnime) {
       try {
         const verification = verificationMap.get(anime.mal_id) ?? UNVERIFIED;
-        recommendations.push(await buildRecommendationItem(anime, score, verification));
+        recommendations.push(buildRecommendationItem(anime, score, verification));
       } catch {
         continue;
       }
