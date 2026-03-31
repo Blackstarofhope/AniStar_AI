@@ -12,8 +12,9 @@ Preferred communication style: Simple, everyday language.
 
 **Framework**: React Native with Expo SDK 54, utilizing the new architecture and React Compiler for performance optimization.
 
-**Navigation**: Bottom tab navigation with two tabs, each containing a stack navigator:
+**Navigation**: Bottom tab navigation with three tabs, each containing a stack navigator:
 - **Schedule tab**: HomeScreen (day-of-week filter tabs with anime cards) → AnimeDetailScreen
+- **Library tab**: LibraryScreen (all-anime grid with search, genre filters, source toggle, vibe profiles, discovery badges, thumbs up/down, detail modal)
 - **For You tab**: RecommendationsScreen (AI-powered recommendations) → AnimeDetailScreen
 - Navigation files: `client/navigation/TabNavigator.tsx`, `client/navigation/RootStackNavigator.tsx`, `client/navigation/types.ts`
 
