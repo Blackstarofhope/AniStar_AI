@@ -9,10 +9,16 @@ import { Colors } from "@/constants/theme";
 import HomeScreen from "@/screens/HomeScreen";
 import AnimeDetailScreen from "@/screens/AnimeDetailScreen";
 import RecommendationsScreen from "@/screens/RecommendationsScreen";
-import type { ScheduleStackParamList, RecsStackParamList } from "./types";
+import LibraryScreen from "@/screens/LibraryScreen";
+import type {
+  ScheduleStackParamList,
+  RecsStackParamList,
+  LibraryStackParamList,
+} from "./types";
 
 const ScheduleStack = createNativeStackNavigator<ScheduleStackParamList>();
 const RecsStack = createNativeStackNavigator<RecsStackParamList>();
+const LibraryStack = createNativeStackNavigator<LibraryStackParamList>();
 const Tab = createBottomTabNavigator();
 
 function ScheduleNavigator() {
@@ -35,6 +41,24 @@ function ScheduleNavigator() {
         options={{ headerTitle: "", headerTransparent: true }}
       />
     </ScheduleStack.Navigator>
+  );
+}
+
+function LibraryNavigator() {
+  const screenOptions = useScreenOptions();
+  return (
+    <LibraryStack.Navigator
+      screenOptions={{
+        ...screenOptions,
+        contentStyle: { backgroundColor: Colors.dark.backgroundRoot },
+      }}
+    >
+      <LibraryStack.Screen
+        name="Library"
+        component={LibraryScreen}
+        options={{ headerTitle: () => <HeaderTitle title="Library" /> }}
+      />
+    </LibraryStack.Navigator>
   );
 }
 
@@ -90,6 +114,15 @@ export default function TabNavigator() {
               />
             );
           }
+          if (route.name === "LibraryTab") {
+            return (
+              <Ionicons
+                name={focused ? "library" : "library-outline"}
+                size={size}
+                color={color}
+              />
+            );
+          }
           if (route.name === "ForYou") {
             return (
               <Ionicons
@@ -107,6 +140,11 @@ export default function TabNavigator() {
         name="Schedule"
         component={ScheduleNavigator}
         options={{ tabBarLabel: "Schedule" }}
+      />
+      <Tab.Screen
+        name="LibraryTab"
+        component={LibraryNavigator}
+        options={{ tabBarLabel: "Library" }}
       />
       <Tab.Screen
         name="ForYou"

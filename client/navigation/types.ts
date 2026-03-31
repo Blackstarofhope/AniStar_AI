@@ -1,3 +1,7 @@
+export type LibraryStackParamList = {
+  Library: undefined;
+};
+
 export type ScheduleStackParamList = {
   Home: undefined;
   AnimeDetail: { animeId: number; title: string; imageUrl: string };

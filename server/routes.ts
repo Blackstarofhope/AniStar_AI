@@ -5,9 +5,9 @@ import {
   getRecommendations, processFeedback, getAIStatus, verifyAnimeArtwork,
   restTrain, hasRestTrained
 } from "./ai/recommendEngine.js";
-import { getSchedule, getSeasonalAnime, getAnimeDetails, initAnimeData } from "./ai/animeData.js";
+import { getSchedule, getSeasonalAnime, getAnimeDetails, getAllCurrentAnime, initAnimeData } from "./ai/animeData.js";
 import { validateImageUrl } from "./ai/visionVerifier.js";
-import { generateVibeProfile } from "./ai/vibeProfiler.js";
+import { generateVibeProfile, getVibeProfileFromCache } from "./ai/vibeProfiler.js";
 import { processChat, STAR_NAME, STAR_BIO } from "./ai/starChat.js";
 import type { ChatMessage } from "./ai/starChat.js";
 import { initStarLearning, recordChatFeedback } from "./ai/starLearning.js";
@@ -37,6 +37,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ data });
     } catch (e) {
       res.status(500).json({ error: "Failed to fetch seasonal anime" });
+    }
+  });
+
+  app.get("/api/anime/library", async (req: Request, res: Response) => {
+    const source = (req.query.source as string | undefined) || "all";
+    try {
+      type Item = {
+        mal_id: number; title: string; imageUrl: string; score: number | null;
+        genres: string[]; episodes: number | null; synopsis: string | null;
+        vibe: { atmosphere: string; pacing: string; tone: string; protagonistArchetype: string; relationshipDynamics: string; emotionalArc: string; vibeText: string } | null;
+        discoveredBy: string | null;
+      };
+
+      const seen = new Set<number>();
+      const rawList: { mal_id: number; title: string; images: { jpg: { large_image_url: string } }; score?: number; genres?: { name: string }[]; episodes?: number; synopsis?: string }[] = [];
+
+      if (source === "airing" || source === "all") {
+        const airing = await getAllCurrentAnime();
+        for (const a of airing) {
+          if (!seen.has(a.mal_id)) { seen.add(a.mal_id); rawList.push(a as typeof rawList[0]); }
+        }
+      }
+
+      if (source === "discovered" || source === "all") {
+        const searched = await storage.getAllSearchedAnime();
+        for (const s of searched) {
+          const d = s.data as typeof rawList[0];
+          if (d?.mal_id && !seen.has(d.mal_id)) { seen.add(d.mal_id); rawList.push(d); }
+        }
+      }
+
+      const items: Item[] = await Promise.all(rawList.map(async (a) => {
+        const vibe = getVibeProfileFromCache(a.mal_id);
+        let discoveredBy: string | null = null;
+        try {
+          const disc = await storage.getDiscovery(a.mal_id);
+          discoveredBy = disc ? disc.displayName : null;
+        } catch { /* ignore individual lookup failures */ }
+        return {
+          mal_id: a.mal_id,
+          title: a.title,
+          imageUrl: a.images?.jpg?.large_image_url ?? "",
+          score: a.score ?? null,
+          genres: (a.genres ?? []).map((g) => g.name),
+          episodes: a.episodes ?? null,
+          synopsis: a.synopsis ?? null,
+          vibe: vibe ? {
+            atmosphere: vibe.atmosphere, pacing: vibe.pacing, tone: vibe.tone,
+            protagonistArchetype: vibe.protagonistArchetype,
+            relationshipDynamics: vibe.relationshipDynamics,
+            emotionalArc: vibe.emotionalArc, vibeText: vibe.vibeText,
+          } : null,
+          discoveredBy,
+        };
+      }));
+
+      res.json({ items });
+    } catch (e) {
+      console.error("[Library] Error:", e);
+      res.status(500).json({ error: "Failed to fetch library" });
     }
   });
 
