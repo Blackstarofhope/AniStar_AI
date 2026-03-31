@@ -5,7 +5,7 @@ import {
   getRecommendations, processFeedback, getAIStatus, verifyAnimeArtwork,
   restTrain, hasRestTrained
 } from "./ai/recommendEngine.js";
-import { getSchedule, getSeasonalAnime, getAnimeDetails, getAllCurrentAnime, initAnimeData } from "./ai/animeData.js";
+import { getSchedule, getSeasonalAnime, getAnimeDetails, getAllCurrentAnime, initAnimeData, getSearchedCacheEntries } from "./ai/animeData.js";
 import { validateImageUrl } from "./ai/visionVerifier.js";
 import { generateVibeProfile, getVibeProfileFromCache } from "./ai/vibeProfiler.js";
 import { processChat, STAR_NAME, STAR_BIO } from "./ai/starChat.js";
@@ -61,9 +61,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (source === "discovered" || source === "all") {
-        const searched = await storage.getAllSearchedAnime();
-        for (const s of searched) {
-          const d = s.data as typeof rawList[0];
+        // Merge DB-persisted searched anime with the in-memory cache so that
+        // discoveries appear immediately even when the DB write is still in-flight
+        // or failed transiently.
+        const dbSearched = await storage.getAllSearchedAnime();
+        const memSearched = getSearchedCacheEntries();
+
+        // Build a unified set: DB entries first, then any mem-only extras.
+        const merged = [...dbSearched.map((s) => s.data as typeof rawList[0])];
+        const mergedIds = new Set(merged.map((d) => d?.mal_id).filter(Boolean));
+        for (const a of memSearched) {
+          if (!mergedIds.has(a.mal_id)) merged.push(a as typeof rawList[0]);
+        }
+
+        for (const d of merged) {
           if (d?.mal_id && !seen.has(d.mal_id)) { seen.add(d.mal_id); rawList.push(d); }
         }
       }

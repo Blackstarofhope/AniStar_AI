@@ -305,9 +305,11 @@ export async function searchAndAddAnime(query: string): Promise<AnimeScheduleIte
       if (!seen.has(item.mal_id)) {
         merged.push(item);
         seen.add(item.mal_id);
-        storage.saveSearchedAnime(item.mal_id, item as unknown as object).catch((e) => {
-          console.warn("[AnimeData] Failed to persist searched anime:", e instanceof Error ? e.message : e);
-        });
+        try {
+          await storage.saveSearchedAnime(item.mal_id, item as unknown as object);
+        } catch (e) {
+          console.error("[AnimeData] Failed to persist searched anime to DB:", e instanceof Error ? e.message : e);
+        }
       }
     }
 
@@ -341,6 +343,10 @@ export async function initAnimeData(): Promise<void> {
   } catch (e) {
     console.warn("[AnimeData] Failed to load searched anime from DB:", e instanceof Error ? e.message : e);
   }
+}
+
+export function getSearchedCacheEntries(): AnimeScheduleItem[] {
+  return scheduleCache.get("searched")?.data ?? [];
 }
 
 export function clearAnimeCache(): void {

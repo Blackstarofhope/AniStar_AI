@@ -37,6 +37,32 @@ export interface ChatResponse {
 export { STAR_NAME, STAR_BIO };
 
 // ---------------------------------------------------------------------------
+// Pending discovery retry queue
+// If recording a discovery to DB fails, we queue it here and retry on the
+// next successful chat call, so no discovery is permanently lost.
+// ---------------------------------------------------------------------------
+interface PendingDiscovery {
+  malId: number;
+  userId: string;
+  displayName: string;
+}
+const pendingDiscoveries: PendingDiscovery[] = [];
+
+async function flushPendingDiscoveries(): Promise<void> {
+  if (pendingDiscoveries.length === 0) return;
+  const toRetry = pendingDiscoveries.splice(0, pendingDiscoveries.length);
+  for (const entry of toRetry) {
+    try {
+      await storage.recordDiscovery(entry.malId, entry.userId, entry.displayName);
+      console.log(`[Star] Retried discovery record for mal_id=${entry.malId} — OK`);
+    } catch (e) {
+      console.error(`[Star] Retry of discovery record failed for mal_id=${entry.malId}:`, e instanceof Error ? e.message : e);
+      pendingDiscoveries.push(entry);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Gemini API integration
 // ---------------------------------------------------------------------------
 
@@ -177,6 +203,9 @@ export async function processChat(
   history: ChatMessage[],
   userId = "default"
 ): Promise<ChatResponse> {
+  // Retry any discovery records that failed on a previous call.
+  await flushPendingDiscoveries();
+
   const catalog = await getAllCurrentAnime();
   const catalogTitles = catalog.map((a) => a.title);
 
@@ -275,10 +304,15 @@ export async function processChat(
         if (entries.length > 0) {
           await addAnimeEmbeddings(userId, entries);
         }
-        // Record discovery attribution for each new anime (fire-and-forget).
+        // Record discovery attribution for each new anime.
         const displayName = await storage.getDisplayName(userId).catch(() => null) ?? userId;
         for (const a of searchResults) {
-          storage.recordDiscovery(a.mal_id, userId, displayName).catch(() => {});
+          try {
+            await storage.recordDiscovery(a.mal_id, userId, displayName);
+          } catch (e) {
+            console.error(`[Star] recordDiscovery failed for mal_id=${a.mal_id} — queuing for retry:`, e instanceof Error ? e.message : e);
+            pendingDiscoveries.push({ malId: a.mal_id, userId, displayName });
+          }
         }
 
         const titles: string[] = [];
