@@ -330,6 +330,9 @@ export default function LibraryScreen() {
   const filtered = useMemo(() => {
     if (!data?.items) return [];
     let items = data.items;
+    if (source === "discovered") {
+      items = items.filter((a) => a.discoveredBy !== null && a.discoveredBy !== undefined);
+    }
     if (search.trim()) {
       const q = search.toLowerCase();
       items = items.filter((a) => a.title.toLowerCase().includes(q));
@@ -338,7 +341,7 @@ export default function LibraryScreen() {
       items = items.filter((a) => a.genres.some((g) => selectedGenres.has(g)));
     }
     return items;
-  }, [data, search, selectedGenres]);
+  }, [data, source, search, selectedGenres]);
 
   const toggleGenre = useCallback((g: string) => {
     setSelectedGenres((prev) => {
@@ -370,7 +373,7 @@ export default function LibraryScreen() {
     [],
   );
 
-  const ListHeader = useMemo(
+  const renderListHeader = useCallback(
     () => (
       <View style={styles.controls}>
         <View style={styles.sourceToggle}>
@@ -476,7 +479,7 @@ export default function LibraryScreen() {
           gap: CARD_GAP,
         }}
         columnWrapperStyle={{ gap: CARD_GAP }}
-        ListHeaderComponent={ListHeader}
+        ListHeaderComponent={renderListHeader}
         ListEmptyComponent={ListEmpty}
       />
 
