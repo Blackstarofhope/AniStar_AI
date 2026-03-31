@@ -7,6 +7,10 @@ import {
   type InsertUser, type User,
 } from "@shared/schema";
 
+if (!process.env.DATABASE_URL) {
+  console.warn("[DB] WARNING: DATABASE_URL is not set — database features will not work.");
+}
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   idleTimeoutMillis: 30000,
@@ -19,6 +23,15 @@ pool.on("error", (err) => {
 });
 
 export const db = drizzle(pool);
+
+export async function testConnection(): Promise<void> {
+  try {
+    await pool.query("SELECT 1");
+    console.log("[DB] Connection OK — database is reachable.");
+  } catch (err) {
+    console.error("[DB] Connection FAILED:", err instanceof Error ? err.message : err);
+  }
+}
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
@@ -156,13 +169,18 @@ class PostgresStorage implements IStorage {
   }
 
   async setDisplayName(userId: string, displayName: string): Promise<void> {
-    await db
-      .insert(userProfiles)
-      .values({ userId, displayName })
-      .onConflictDoUpdate({
-        target: userProfiles.userId,
-        set: { displayName },
-      });
+    try {
+      await db
+        .insert(userProfiles)
+        .values({ userId, displayName })
+        .onConflictDoUpdate({
+          target: userProfiles.userId,
+          set: { displayName },
+        });
+    } catch (err) {
+      console.error("[DB] setDisplayName failed:", err);
+      throw err;
+    }
   }
 
   async getDisplayName(userId: string): Promise<string | null> {

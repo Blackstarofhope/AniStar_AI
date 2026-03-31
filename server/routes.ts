@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
-import { storage } from "./storage.js";
+import { storage, testConnection } from "./storage.js";
 import {
   getRecommendations, processFeedback, getAIStatus, verifyAnimeArtwork,
   restTrain, hasRestTrained
@@ -295,6 +295,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   const httpServer = createServer(app);
 
+  testConnection();
   initAnimeData().catch((e) => console.error("[AnimeData] Init failed:", e));
 
   setTimeout(() => {
