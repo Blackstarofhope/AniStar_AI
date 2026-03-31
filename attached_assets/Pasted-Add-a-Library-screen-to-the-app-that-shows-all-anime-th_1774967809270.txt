@@ -1,0 +1,30 @@
+Add a Library screen to the app that shows all anime the system knows about. Here are the requirements:
+
+1. Create a new screen client/screens/LibraryScreen.tsx that:
+   - Fetches all anime from a new GET endpoint /api/anime/library (we'll create this)
+   - Displays anime in a scrollable grid or list with cover images, titles, scores, and genres
+   - Each anime card shows:
+     - Cover image (from images.jpg.large_image_url)
+     - Title and MAL score
+     - Genre tags
+     - If the anime has a vibe profile, show the atmosphere and tone as a subtle label (e.g. "Vibe: dark dystopia, intense tone")
+     - If the anime was discovered by a community member, show "Discovered by [displayName]" with a small star or badge icon
+   - Add a search/filter bar at the top that filters by title text
+   - Add filter chips for genres (Action, Romance, Shounen, etc.) that filter the list
+   - Add a tab or toggle to switch between "Currently Airing" and "Community Discovered" anime
+   - Each card has a thumbs up / thumbs down button that calls POST /api/ai/feedback with rating 0.8 (up) or 0.2 (down) and the user's userId
+   - Tapping a card opens a detail view or modal with full synopsis, vibe profile details (atmosphere, pacing, tone, protagonist archetype, relationship dynamics, emotional arc), and discovery attribution
+
+2. Create the backend endpoint GET /api/anime/library in server/routes.ts:
+   - Call getAllCurrentAnime() to get all anime
+   - For each anime, attach the vibe profile from cache (use getVibeProfileFromCache, do not call Gemini — cache only)
+   - For each anime, attach discovery info from storage.getDiscovery
+   - Return the full list as JSON with these fields per entry: mal_id, title, imageUrl, score, genres, episodes, synopsis, vibe (atmosphere, tone, protagonistArchetype or null), discoveredBy (displayName or null)
+   - This endpoint should be fast — no Gemini calls, no CLIP encoding, just cached data and DB lookups
+   - Accept optional query params: genre (filter by genre name), search (filter by title substring), source ("airing" or "discovered" or "all", default "all")
+
+3. Add the Library screen to the bottom tab navigation. Put it between Home and the existing tabs. Use a book or grid icon from @expo/vector-icons.
+
+4. Pass userId from UserContext to the feedback buttons so ratings are per-user.
+
+Do not modify any AI engine files. This is purely a UI and one new read-only API endpoint.
