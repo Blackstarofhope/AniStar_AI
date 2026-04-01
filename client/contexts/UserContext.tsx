@@ -18,7 +18,8 @@ interface UserContextValue {
   userId: string;
   displayName: string | null;
   isLoading: boolean;
-  saveDisplayName: (name: string) => Promise<void>;
+  saveDisplayName: (name: string, pin: string) => Promise<void>;
+  login: (displayName: string, pin: string) => Promise<boolean>;
 }
 
 const UserContext = createContext<UserContextValue>({
@@ -26,6 +27,7 @@ const UserContext = createContext<UserContextValue>({
   displayName: null,
   isLoading: true,
   saveDisplayName: async () => {},
+  login: async () => false,
 });
 
 export function UserProvider({ children }: { children: React.ReactNode }) {
@@ -57,21 +59,39 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     init();
   }, []);
 
-  const saveDisplayName = useCallback(async (name: string) => {
+  const saveDisplayName = useCallback(async (name: string, pin: string) => {
     const trimmed = name.trim();
     const url = new URL("/api/user/displayname", getApiUrl());
     const res = await fetch(url.toString(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, displayName: trimmed }),
+      body: JSON.stringify({ userId, displayName: trimmed, pin }),
     });
+    if (res.status === 409) throw new Error("taken");
     if (!res.ok) throw new Error("Failed to save display name");
     await AsyncStorage.setItem(DISPLAY_NAME_KEY, trimmed);
     setDisplayName(trimmed);
   }, [userId]);
 
+  const login = useCallback(async (name: string, pin: string): Promise<boolean> => {
+    const url = new URL("/api/user/login", getApiUrl());
+    const res = await fetch(url.toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: name.trim(), pin }),
+    });
+    if (!res.ok) return false;
+    const { userId: returnedId } = await res.json() as { userId: string };
+    await AsyncStorage.setItem(USER_ID_KEY, returnedId);
+    await AsyncStorage.setItem(DISPLAY_NAME_KEY, name.trim());
+    setUserId(returnedId);
+    setCurrentUserId(returnedId);
+    setDisplayName(name.trim());
+    return true;
+  }, []);
+
   return (
-    <UserContext.Provider value={{ userId, displayName, isLoading, saveDisplayName }}>
+    <UserContext.Provider value={{ userId, displayName, isLoading, saveDisplayName, login }}>
       {children}
     </UserContext.Provider>
   );

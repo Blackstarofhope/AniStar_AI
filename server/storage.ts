@@ -55,8 +55,10 @@ export interface IStorage {
   recordDiscovery(malId: number, userId: string, displayName: string): Promise<void>;
   getDiscovery(malId: number): Promise<{ userId: string; displayName: string; discoveredAt: Date } | null>;
 
-  setDisplayName(userId: string, displayName: string): Promise<void>;
+  setDisplayName(userId: string, displayName: string, pin?: string): Promise<void>;
   getDisplayName(userId: string): Promise<string | null>;
+  isDisplayNameTaken(displayName: string, excludeUserId: string): Promise<boolean>;
+  loginWithDisplayName(displayName: string, pin: string): Promise<string | null>;
 }
 
 class PostgresStorage implements IStorage {
@@ -225,17 +227,21 @@ class PostgresStorage implements IStorage {
     );
   }
 
-  async setDisplayName(userId: string, displayName: string): Promise<void> {
-    return this.withRetry(() =>
-      db
+  async setDisplayName(userId: string, displayName: string, pin?: string): Promise<void> {
+    return this.withRetry(() => {
+      const vals: { userId: string; displayName: string; pin?: string } = { userId, displayName };
+      if (pin !== undefined) vals.pin = pin;
+      const updateSet: { displayName: string; pin?: string } = { displayName };
+      if (pin !== undefined) updateSet.pin = pin;
+      return db
         .insert(userProfiles)
-        .values({ userId, displayName })
+        .values(vals)
         .onConflictDoUpdate({
           target: userProfiles.userId,
-          set: { displayName },
+          set: updateSet,
         })
-        .then(() => undefined)
-    );
+        .then(() => undefined);
+    });
   }
 
   async getDisplayName(userId: string): Promise<string | null> {
@@ -245,6 +251,29 @@ class PostgresStorage implements IStorage {
         .from(userProfiles)
         .where(eq(userProfiles.userId, userId))
         .then((rows) => rows[0]?.displayName ?? null)
+    );
+  }
+
+  async isDisplayNameTaken(displayName: string, excludeUserId: string): Promise<boolean> {
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(userProfiles)
+        .where(eq(userProfiles.displayName, displayName))
+        .then((rows) => rows.some((r) => r.userId !== excludeUserId))
+    );
+  }
+
+  async loginWithDisplayName(displayName: string, pin: string): Promise<string | null> {
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(userProfiles)
+        .where(eq(userProfiles.displayName, displayName))
+        .then((rows) => {
+          const match = rows.find((r) => r.pin === pin);
+          return match?.userId ?? null;
+        })
     );
   }
 }

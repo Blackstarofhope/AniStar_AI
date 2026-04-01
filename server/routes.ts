@@ -271,19 +271,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/user/displayname", async (req: Request, res: Response) => {
-    const { userId, displayName } = req.body as { userId?: string; displayName?: string };
+    const { userId, displayName, pin } = req.body as { userId?: string; displayName?: string; pin?: string };
     if (typeof userId !== "string" || userId.trim().length === 0) {
       return res.status(400).json({ error: "userId is required" });
     }
     if (typeof displayName !== "string" || displayName.trim().length === 0) {
       return res.status(400).json({ error: "displayName is required" });
     }
+    if (pin !== undefined && (typeof pin !== "string" || !/^\d{4}$/.test(pin))) {
+      return res.status(400).json({ error: "pin must be exactly 4 digits" });
+    }
     try {
-      await storage.setDisplayName(userId.trim(), displayName.trim());
+      const taken = await storage.isDisplayNameTaken(displayName.trim(), userId.trim());
+      if (taken) {
+        return res.status(409).json({ error: "Display name is already taken" });
+      }
+      await storage.setDisplayName(userId.trim(), displayName.trim(), pin);
       res.json({ success: true });
     } catch (e) {
       console.error("[User] setDisplayName error:", e);
       res.status(500).json({ error: "Failed to set display name" });
+    }
+  });
+
+  app.post("/api/user/login", async (req: Request, res: Response) => {
+    const { displayName, pin } = req.body as { displayName?: string; pin?: string };
+    if (typeof displayName !== "string" || displayName.trim().length === 0) {
+      return res.status(400).json({ error: "displayName is required" });
+    }
+    if (typeof pin !== "string" || !/^\d{4}$/.test(pin)) {
+      return res.status(400).json({ error: "pin must be exactly 4 digits" });
+    }
+    try {
+      const userId = await storage.loginWithDisplayName(displayName.trim(), pin);
+      if (!userId) {
+        return res.status(401).json({ error: "Invalid display name or PIN" });
+      }
+      res.json({ userId });
+    } catch (e) {
+      console.error("[User] login error:", e);
+      res.status(500).json({ error: "Login failed" });
     }
   });
 

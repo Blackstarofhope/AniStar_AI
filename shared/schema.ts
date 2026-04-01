@@ -49,8 +49,11 @@ export const animeDiscovery = pgTable("anime_discovery", {
 export const userProfiles = pgTable("user_profiles", {
   userId: text("user_id").primaryKey(),
   displayName: text("display_name").notNull(),
+  pin: text("pin"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  displayNameUnique: unique("user_profiles_display_name_unique").on(t.displayName),
+}));
 
 export const insertUserSchema = createInsertSchema(users).pick({
   username: true,

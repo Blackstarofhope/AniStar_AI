@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import {
   View,
   TextInput,
@@ -14,22 +14,51 @@ import { ThemedText } from "@/components/ThemedText";
 import { Colors, Spacing, BorderRadius } from "@/constants/theme";
 import { useUser } from "@/contexts/UserContext";
 
+type Mode = "signup" | "login";
+
 export default function ProfileSetupScreen() {
-  const { saveDisplayName } = useUser();
+  const { saveDisplayName, login } = useUser();
+  const [mode, setMode] = useState<Mode>("signup");
   const [name, setName] = useState("");
+  const [pin, setPin] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const pinRef = useRef<TextInput>(null);
 
-  const canSubmit = name.trim().length >= 2 && !isSaving;
+  const isSignup = mode === "signup";
+  const canSubmit =
+    name.trim().length >= 2 &&
+    /^\d{4}$/.test(pin) &&
+    !isSaving;
+
+  function switchMode(next: Mode) {
+    setMode(next);
+    setName("");
+    setPin("");
+    setError(null);
+  }
 
   async function handleSubmit() {
     if (!canSubmit) return;
     setError(null);
     setIsSaving(true);
     try {
-      await saveDisplayName(name.trim());
-    } catch {
-      setError("Could not save your display name. Please try again.");
+      if (isSignup) {
+        await saveDisplayName(name.trim(), pin);
+      } else {
+        const ok = await login(name.trim(), pin);
+        if (!ok) {
+          setError("Display name or PIN is incorrect.");
+          setIsSaving(false);
+          return;
+        }
+      }
+    } catch (e: any) {
+      if (e?.message === "taken") {
+        setError("That display name is already taken. Pick another.");
+      } else {
+        setError("Something went wrong. Please try again.");
+      }
       setIsSaving(false);
     }
   }
@@ -54,9 +83,13 @@ export default function ProfileSetupScreen() {
             <ThemedText style={styles.appName}>AniStar</ThemedText>
           </View>
 
-          <ThemedText style={styles.heading}>Welcome</ThemedText>
+          <ThemedText style={styles.heading}>
+            {isSignup ? "Welcome" : "Sign In"}
+          </ThemedText>
           <ThemedText style={styles.subheading}>
-            Choose a display name so the community can see who discovered new anime.
+            {isSignup
+              ? "Choose a display name and PIN so the community can see who discovered new anime."
+              : "Enter your display name and PIN to restore your account."}
           </ThemedText>
 
           <View style={styles.inputWrapper}>
@@ -70,6 +103,23 @@ export default function ProfileSetupScreen() {
               autoCapitalize="words"
               autoCorrect={false}
               maxLength={32}
+              returnKeyType="next"
+              onSubmitEditing={() => pinRef.current?.focus()}
+            />
+          </View>
+
+          <View style={styles.inputWrapper}>
+            <ThemedText style={styles.label}>4-digit PIN</ThemedText>
+            <TextInput
+              ref={pinRef}
+              style={[styles.input, error ? styles.inputError : null]}
+              value={pin}
+              onChangeText={(t) => { setPin(t.replace(/\D/g, "").slice(0, 4)); setError(null); }}
+              placeholder="e.g. 1234"
+              placeholderTextColor={Colors.dark.tabIconDefault}
+              keyboardType="number-pad"
+              maxLength={4}
+              secureTextEntry
               returnKeyType="done"
               onSubmitEditing={handleSubmit}
             />
@@ -77,7 +127,9 @@ export default function ProfileSetupScreen() {
               <ThemedText style={styles.errorText}>{error}</ThemedText>
             ) : (
               <ThemedText style={styles.hint}>
-                2–32 characters. Visible to other users.
+                {isSignup
+                  ? "Remember your PIN — it's how you'll sign in again."
+                  : "Enter the PIN you chose when you signed up."}
               </ThemedText>
             )}
           </View>
@@ -94,8 +146,21 @@ export default function ProfileSetupScreen() {
             {isSaving ? (
               <ActivityIndicator color="#fff" size="small" />
             ) : (
-              <ThemedText style={styles.buttonText}>Get Started</ThemedText>
+              <ThemedText style={styles.buttonText}>
+                {isSignup ? "Get Started" : "Sign In"}
+              </ThemedText>
             )}
+          </Pressable>
+
+          <Pressable
+            style={styles.switchLink}
+            onPress={() => switchMode(isSignup ? "login" : "signup")}
+          >
+            <ThemedText style={styles.switchText}>
+              {isSignup
+                ? "Already have an account? Sign in"
+                : "New here? Create an account"}
+            </ThemedText>
           </Pressable>
         </KeyboardAwareScrollView>
       </SafeAreaView>
@@ -204,5 +269,15 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#fff",
     letterSpacing: 0.3,
+  },
+  switchLink: {
+    marginTop: Spacing.xl,
+    alignItems: "center",
+    paddingVertical: Spacing.sm,
+  },
+  switchText: {
+    fontSize: 14,
+    color: Colors.dark.accent,
+    textDecorationLine: "underline",
   },
 });

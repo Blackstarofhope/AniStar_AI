@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { getApiUrl } from "@/lib/query-client";
+import { getCurrentUserId } from "@/lib/userState";
 
 const FAVORITES_KEY = "@anistar_favorites";
 
@@ -20,6 +22,16 @@ interface FavoritesContextValue {
 }
 
 const FavoritesContext = createContext<FavoritesContextValue | undefined>(undefined);
+
+function sendFeedback(malId: number, rating: number): void {
+  const userId = getCurrentUserId();
+  const url = new URL("/api/ai/feedback", getApiUrl());
+  fetch(url.toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ malId, rating, userId }),
+  }).catch(() => {});
+}
 
 export function FavoritesProvider({ children }: { children: ReactNode }) {
   const [favorites, setFavorites] = useState<FavoriteAnime[]>([]);
@@ -64,8 +76,10 @@ export function FavoritesProvider({ children }: { children: ReactNode }) {
 
       if (exists) {
         newFavorites = favorites.filter((f) => f.mal_id !== anime.mal_id);
+        sendFeedback(anime.mal_id, 0.4);
       } else {
         newFavorites = [...favorites, anime];
+        sendFeedback(anime.mal_id, 0.75);
       }
 
       setFavorites(newFavorites);
@@ -80,6 +94,7 @@ export function FavoritesProvider({ children }: { children: ReactNode }) {
         const newFavorites = [...favorites, anime];
         setFavorites(newFavorites);
         await saveFavorites(newFavorites);
+        sendFeedback(anime.mal_id, 0.75);
       }
     },
     [favorites, isFavorite]
@@ -90,6 +105,7 @@ export function FavoritesProvider({ children }: { children: ReactNode }) {
       const newFavorites = favorites.filter((f) => f.mal_id !== malId);
       setFavorites(newFavorites);
       await saveFavorites(newFavorites);
+      sendFeedback(malId, 0.4);
     },
     [favorites]
   );
