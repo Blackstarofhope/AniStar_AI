@@ -6,6 +6,7 @@ import {
   extractChatSignals, generateStarResponse, filterByGenres,
   STAR_NAME, STAR_BIO, type ChatSignals,
 } from "./starPersonality.js";
+import { STAR_SYSTEM_PROMPT } from "./starPrompt.js";
 import { processFeedback, getTopAnimeByGenres, addAnimeEmbeddings } from "./recommendEngine.js";
 import { embedAnimeWithFallback, type AnimeInfo } from "./textEmbedder.js";
 import {
@@ -153,14 +154,8 @@ async function callGemini(
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
 
-  const systemPrompt =
-    `You are ${STAR_NAME}, an AI anime guide. ${STAR_BIO} ` +
-    `Respond in character as Star — warm, poetic, knowledgeable. ` +
-    `You have deep knowledge of all anime, not just currently airing shows. ` +
-    `When the user mentions a specific anime, discuss it knowledgeably and suggest similar titles. ` +
-    `When they ask for recommendations, ask about their preferences first or suggest based on conversation context. ` +
-    `Keep responses conversational and under 150 words.` +
-    (searchContext ? `\n${searchContext}` : "");
+  let systemPrompt = STAR_SYSTEM_PROMPT;
+  if (searchContext) systemPrompt += "\n\n## Context for this message\n" + searchContext;
 
   const contents = [
     ...history.slice(-6).map((m) => ({
@@ -174,8 +169,8 @@ async function callGemini(
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents,
     generationConfig: {
-      maxOutputTokens: 220,
-      temperature: 0.9,
+      maxOutputTokens: 350,
+      temperature: 0.8,
       topP: 0.95,
       thinkingConfig: { thinkingBudget: 0 },
     },
