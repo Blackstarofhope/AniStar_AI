@@ -64,11 +64,11 @@ async function flushPendingDiscoveries(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Gemini API integration
+// Anthropic Claude API integration
 // ---------------------------------------------------------------------------
 
-const GEMINI_MODEL = "gemini-2.5-flash";
-const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+const CLAUDE_MODEL = "claude-sonnet-4-20250514";
+const CLAUDE_ENDPOINT = "https://api.anthropic.com/v1/messages";
 
 function httpsPost(url: string, apiKey: string, body: object): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -80,7 +80,8 @@ function httpsPost(url: string, apiKey: string, body: object): Promise<string> {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
         "Content-Length": Buffer.byteLength(payload),
       },
     };
@@ -89,14 +90,14 @@ function httpsPost(url: string, apiKey: string, body: object): Promise<string> {
       res.on("data", (chunk) => { data += chunk; });
       res.on("end", () => {
         if ((res.statusCode ?? 0) >= 400) {
-          reject(new Error(`Gemini HTTP ${res.statusCode}: ${data.slice(0, 200)}`));
+          reject(new Error(`Claude HTTP ${res.statusCode}: ${data.slice(0, 200)}`));
         } else {
           resolve(data);
         }
       });
     });
     req.on("error", reject);
-    req.setTimeout(10000, () => { req.destroy(new Error("Gemini request timed out")); });
+    req.setTimeout(15000, () => { req.destroy(new Error("Claude request timed out")); });
     req.write(payload);
     req.end();
   });
@@ -105,34 +106,26 @@ function httpsPost(url: string, apiKey: string, body: object): Promise<string> {
 const titleExtractionCache = new Map<string, string | null>();
 const TITLE_CACHE_MAX = 500;
 
-async function extractTitleViaGemini(message: string): Promise<string | null> {
+async function extractTitleViaLLM(message: string): Promise<string | null> {
   const quoted = message.match(/["']([A-Za-z0-9][^"']{2,60})["']/);
   if (quoted) return quoted[1].trim();
 
   if (titleExtractionCache.has(message)) return titleExtractionCache.get(message) ?? null;
 
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
 
   const body = {
-    system_instruction: {
-      parts: [{ text: "Extract the anime title from the user's message. Respond with ONLY the anime title, nothing else. If there is no anime title mentioned, respond with exactly: NONE" }],
-    },
-    contents: [{ role: "user", parts: [{ text: message }] }],
-    generationConfig: {
-      maxOutputTokens: 30,
-      temperature: 0,
-      thinkingConfig: { thinkingBudget: 0 },
-    },
+    model: CLAUDE_MODEL,
+    max_tokens: 30,
+    system: "Extract the anime title from the user's message. Respond with ONLY the anime title, nothing else. If there is no anime title mentioned, respond with exactly: NONE",
+    messages: [{ role: "user", content: message }],
   };
 
   try {
-    const raw = await httpsPost(GEMINI_ENDPOINT, apiKey, body);
+    const raw = await httpsPost(CLAUDE_ENDPOINT, apiKey, body);
     const parsed = JSON.parse(raw);
-    const parts: { text?: string; thought?: boolean }[] =
-      parsed?.candidates?.[0]?.content?.parts ?? [];
-    const responsePart = parts.find((p) => !p.thought && p.text && p.text.trim().length > 0);
-    const text = responsePart?.text?.trim();
+    const text = (parsed?.content?.[0]?.text as string | undefined)?.trim();
     const result = text && text !== "NONE" ? text : null;
 
     if (titleExtractionCache.size >= TITLE_CACHE_MAX) {
@@ -146,49 +139,42 @@ async function extractTitleViaGemini(message: string): Promise<string | null> {
   }
 }
 
-async function callGemini(
+async function callClaude(
   userMessage: string,
   history: ChatMessage[],
   searchContext?: string
 ): Promise<string | null> {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
 
   let systemPrompt = STAR_SYSTEM_PROMPT;
   if (searchContext) systemPrompt += "\n\n## Context for this message\n" + searchContext;
 
-  const contents = [
+  const messages = [
     ...history.slice(-6).map((m) => ({
-      role: m.role === "star" ? "model" : "user",
-      parts: [{ text: m.content }],
+      role: m.role === "star" ? "assistant" as const : "user" as const,
+      content: m.content,
     })),
-    { role: "user", parts: [{ text: userMessage }] },
+    { role: "user" as const, content: userMessage },
   ];
 
   const body = {
-    system_instruction: { parts: [{ text: systemPrompt }] },
-    contents,
-    generationConfig: {
-      maxOutputTokens: 350,
-      temperature: 0.8,
-      topP: 0.95,
-      thinkingConfig: { thinkingBudget: 0 },
-    },
+    model: CLAUDE_MODEL,
+    max_tokens: 350,
+    system: systemPrompt,
+    messages,
   };
 
   try {
-    const raw = await httpsPost(GEMINI_ENDPOINT, apiKey, body);
+    const raw = await httpsPost(CLAUDE_ENDPOINT, apiKey, body);
     const parsed = JSON.parse(raw);
-    const parts: { text?: string; thought?: boolean }[] =
-      parsed?.candidates?.[0]?.content?.parts ?? [];
-    const responsePart = parts.find((p) => !p.thought && p.text && p.text.trim().length > 0);
-    const text = responsePart?.text;
-    if (text && text.trim().length > 0) {
-      return text.trim();
+    const text = (parsed?.content?.[0]?.text as string | undefined)?.trim();
+    if (text && text.length > 0) {
+      return text;
     }
     return null;
   } catch (e) {
-    console.warn("[Star] Gemini API error:", e instanceof Error ? e.message : e);
+    console.warn("[Star] Claude API error:", e instanceof Error ? e.message : e);
     return null;
   }
 }
@@ -283,7 +269,7 @@ export async function processChat(
 
   let searchContext: string | undefined;
   if (signals.mentionedTitles.length === 0) {
-    const potentialTitle = await extractTitleViaGemini(message);
+    const potentialTitle = await extractTitleViaLLM(message);
     if (potentialTitle) {
       const searchResults = await searchAndAddAnime(potentialTitle);
       if (searchResults.length > 0) {
@@ -354,8 +340,8 @@ export async function processChat(
     }
   }
 
-  const geminiResponse = await callGemini(message, history, searchContext);
-  const response = geminiResponse ?? generateStarResponse(signals, matches, noMatchFallbacks, historyLength);
+  const claudeResponse = await callClaude(message, history, searchContext);
+  const response = claudeResponse ?? generateStarResponse(signals, matches, noMatchFallbacks, historyLength);
 
   const implicitFeedback =
     signals.likedGenres.length > 0 ||

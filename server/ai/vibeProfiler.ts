@@ -1,8 +1,8 @@
 import * as https from "https";
 import { storage } from "../storage.js";
 
-const GEMINI_MODEL = "gemini-2.5-flash";
-const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+const CLAUDE_MODEL = "claude-sonnet-4-20250514";
+const CLAUDE_ENDPOINT = "https://api.anthropic.com/v1/messages";
 
 const CACHE_MAX = 500;
 const RATE_LIMIT_MS = 500;
@@ -23,7 +23,7 @@ export interface VibeProfile {
 
 const vibeCache = new Map<number, VibeProfile>();
 let dbLoadPromise: Promise<void> | null = null;
-let lastGeminiCallTime = 0;
+let lastLLMCallTime = 0;
 
 function ensureDbLoaded(): Promise<void> {
   if (!dbLoadPromise) {
@@ -60,7 +60,8 @@ function httpsPost(url: string, apiKey: string, body: object): Promise<string> {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
         "Content-Length": Buffer.byteLength(payload),
       },
     };
@@ -69,14 +70,14 @@ function httpsPost(url: string, apiKey: string, body: object): Promise<string> {
       res.on("data", (chunk) => { data += chunk; });
       res.on("end", () => {
         if ((res.statusCode ?? 0) >= 400) {
-          reject(new Error(`Gemini HTTP ${res.statusCode}: ${data.slice(0, 200)}`));
+          reject(new Error(`Claude HTTP ${res.statusCode}: ${data.slice(0, 200)}`));
         } else {
           resolve(data);
         }
       });
     });
     req.on("error", reject);
-    req.setTimeout(12000, () => { req.destroy(new Error("Gemini vibe request timed out")); });
+    req.setTimeout(12000, () => { req.destroy(new Error("Claude vibe request timed out")); });
     req.write(payload);
     req.end();
   });
@@ -97,15 +98,15 @@ export async function generateVibeProfile(
 
   if (vibeCache.has(malId)) return vibeCache.get(malId)!;
 
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
 
   const now = Date.now();
-  const elapsed = now - lastGeminiCallTime;
+  const elapsed = now - lastLLMCallTime;
   if (elapsed < RATE_LIMIT_MS) {
     await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_MS - elapsed));
   }
-  lastGeminiCallTime = Date.now();
+  lastLLMCallTime = Date.now();
 
   const synopsisSnippet = synopsis.slice(0, 300);
   const genresStr = genres.join(", ") || "Unknown";
@@ -123,22 +124,16 @@ export async function generateVibeProfile(
     "emotionalArc (the overarching emotional journey in 5-10 words).";
 
   const body = {
-    system_instruction: { parts: [{ text: systemPrompt }] },
-    contents: [{ role: "user", parts: [{ text: userMessage }] }],
-    generationConfig: {
-      maxOutputTokens: 300,
-      temperature: 0.3,
-      thinkingConfig: { thinkingBudget: 0 },
-    },
+    model: CLAUDE_MODEL,
+    max_tokens: 300,
+    system: systemPrompt,
+    messages: [{ role: "user", content: userMessage }],
   };
 
   try {
-    const raw = await httpsPost(GEMINI_ENDPOINT, apiKey, body);
+    const raw = await httpsPost(CLAUDE_ENDPOINT, apiKey, body);
     const parsed = JSON.parse(raw);
-    const parts: { text?: string; thought?: boolean }[] =
-      parsed?.candidates?.[0]?.content?.parts ?? [];
-    const responsePart = parts.find((p) => !p.thought && p.text && p.text.trim().length > 0);
-    const text = responsePart?.text?.trim();
+    const text = (parsed?.content?.[0]?.text as string | undefined)?.trim();
     if (!text) return null;
 
     const jsonText = text.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/, "").trim();
