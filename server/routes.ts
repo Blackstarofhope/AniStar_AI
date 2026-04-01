@@ -278,8 +278,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (typeof displayName !== "string" || displayName.trim().length === 0) {
       return res.status(400).json({ error: "displayName is required" });
     }
-    if (pin !== undefined && (typeof pin !== "string" || !/^\d{4}$/.test(pin))) {
-      return res.status(400).json({ error: "pin must be exactly 4 digits" });
+    if (typeof pin !== "string" || !/^\d{4}$/.test(pin)) {
+      return res.status(400).json({ error: "PIN must be exactly 4 digits" });
     }
     try {
       const taken = await storage.isDisplayNameTaken(displayName.trim(), userId.trim());
@@ -287,10 +287,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(409).json({ error: "Display name is already taken" });
       }
       await storage.setDisplayName(userId.trim(), displayName.trim(), pin);
-      res.json({ success: true });
+      return res.json({ success: true });
     } catch (e) {
       console.error("[User] setDisplayName error:", e);
-      res.status(500).json({ error: "Failed to set display name" });
+      return res.status(500).json({ error: "Failed to set display name" });
     }
   });
 
