@@ -13,13 +13,14 @@ if (!process.env.DATABASE_URL) {
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
-  max: 5,
+  max: 3,
+  idleTimeoutMillis: 10000,
+  connectionTimeoutMillis: 5000,
+  allowExitOnIdle: true,
 });
 
 pool.on("error", (err) => {
-  console.error("[DB] Idle client error (connection dropped by server):", err.message);
+  console.warn("[DB] Pool error:", err.message);
 });
 
 export const db = drizzle(pool);
@@ -59,136 +60,192 @@ export interface IStorage {
 }
 
 class PostgresStorage implements IStorage {
+  private async withRetry<T>(fn: () => Promise<T>, retries = 2): Promise<T> {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await fn();
+      } catch (err: any) {
+        const isConnectionError =
+          err?.message?.includes("terminat") ||
+          err?.message?.includes("timeout") ||
+          err?.message?.includes("ECONNREFUSED");
+        if (isConnectionError && attempt < retries) {
+          console.warn(`[DB] Retry ${attempt + 1}/${retries} after connection error`);
+          await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error("unreachable");
+  }
+
   async getUser(id: string): Promise<User | undefined> {
-    const rows = await db.select().from(users).where(eq(users.id, id));
-    return rows[0];
+    return this.withRetry(() =>
+      db.select().from(users).where(eq(users.id, id)).then((rows) => rows[0])
+    );
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    const rows = await db.select().from(users).where(eq(users.username, username));
-    return rows[0];
+    return this.withRetry(() =>
+      db.select().from(users).where(eq(users.username, username)).then((rows) => rows[0])
+    );
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    const rows = await db.insert(users).values(insertUser).returning();
-    return rows[0];
+    return this.withRetry(() =>
+      db.insert(users).values(insertUser).returning().then((rows) => rows[0])
+    );
   }
 
   async saveEngineState(userId: string, json: object): Promise<void> {
-    await db
-      .insert(userEngineState)
-      .values({ userId, engineJson: json, updatedAt: new Date() })
-      .onConflictDoUpdate({
-        target: userEngineState.userId,
-        set: { engineJson: json, updatedAt: new Date() },
-      });
+    return this.withRetry(() =>
+      db
+        .insert(userEngineState)
+        .values({ userId, engineJson: json, updatedAt: new Date() })
+        .onConflictDoUpdate({
+          target: userEngineState.userId,
+          set: { engineJson: json, updatedAt: new Date() },
+        })
+        .then(() => undefined)
+    );
   }
 
   async loadEngineState(userId: string): Promise<object | null> {
-    const rows = await db
-      .select()
-      .from(userEngineState)
-      .where(eq(userEngineState.userId, userId));
-    return (rows[0]?.engineJson as object) ?? null;
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(userEngineState)
+        .where(eq(userEngineState.userId, userId))
+        .then((rows) => (rows[0]?.engineJson as object) ?? null)
+    );
   }
 
   async saveSearchedAnime(malId: number, data: object): Promise<void> {
-    await db
-      .insert(animeSearched)
-      .values({ malId, data })
-      .onConflictDoUpdate({
-        target: animeSearched.malId,
-        set: { data },
-      });
+    return this.withRetry(() =>
+      db
+        .insert(animeSearched)
+        .values({ malId, data })
+        .onConflictDoUpdate({
+          target: animeSearched.malId,
+          set: { data },
+        })
+        .then(() => undefined)
+    );
   }
 
   async getAllSearchedAnime(): Promise<{ malId: number; data: object }[]> {
-    const rows = await db.select().from(animeSearched);
-    return rows.map((r) => ({ malId: r.malId, data: r.data as object }));
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(animeSearched)
+        .then((rows) => rows.map((r) => ({ malId: r.malId, data: r.data as object })))
+    );
   }
 
   async saveVibeProfile(malId: number, profile: object): Promise<void> {
-    await db
-      .insert(vibeProfiles)
-      .values({ malId, profile })
-      .onConflictDoUpdate({
-        target: vibeProfiles.malId,
-        set: { profile },
-      });
+    return this.withRetry(() =>
+      db
+        .insert(vibeProfiles)
+        .values({ malId, profile })
+        .onConflictDoUpdate({
+          target: vibeProfiles.malId,
+          set: { profile },
+        })
+        .then(() => undefined)
+    );
   }
 
   async getVibeProfile(malId: number): Promise<object | null> {
-    const rows = await db
-      .select()
-      .from(vibeProfiles)
-      .where(eq(vibeProfiles.malId, malId));
-    return (rows[0]?.profile as object) ?? null;
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(vibeProfiles)
+        .where(eq(vibeProfiles.malId, malId))
+        .then((rows) => (rows[0]?.profile as object) ?? null)
+    );
   }
 
   async getAllVibeProfiles(): Promise<{ malId: number; profile: object }[]> {
-    const rows = await db.select().from(vibeProfiles);
-    return rows.map((r) => ({ malId: r.malId, profile: r.profile as object }));
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(vibeProfiles)
+        .then((rows) => rows.map((r) => ({ malId: r.malId, profile: r.profile as object })))
+    );
   }
 
   async saveRating(userId: string, malId: number, rating: number): Promise<void> {
-    await db
-      .insert(userRatings)
-      .values({ userId, malId, rating })
-      .onConflictDoUpdate({
-        target: [userRatings.userId, userRatings.malId],
-        set: { rating },
-      });
+    return this.withRetry(() =>
+      db
+        .insert(userRatings)
+        .values({ userId, malId, rating })
+        .onConflictDoUpdate({
+          target: [userRatings.userId, userRatings.malId],
+          set: { rating },
+        })
+        .then(() => undefined)
+    );
   }
 
   async getUserRatings(userId: string): Promise<{ malId: number; rating: number }[]> {
-    const rows = await db
-      .select()
-      .from(userRatings)
-      .where(eq(userRatings.userId, userId));
-    return rows.map((r) => ({ malId: r.malId, rating: r.rating }));
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(userRatings)
+        .where(eq(userRatings.userId, userId))
+        .then((rows) => rows.map((r) => ({ malId: r.malId, rating: r.rating })))
+    );
   }
 
   async recordDiscovery(malId: number, userId: string, displayName: string): Promise<void> {
-    await db
-      .insert(animeDiscovery)
-      .values({ malId, discoveredByUserId: userId, discoveredByDisplayName: displayName })
-      .onConflictDoNothing();
+    return this.withRetry(() =>
+      db
+        .insert(animeDiscovery)
+        .values({ malId, discoveredByUserId: userId, discoveredByDisplayName: displayName })
+        .onConflictDoNothing()
+        .then(() => undefined)
+    );
   }
 
   async getDiscovery(malId: number): Promise<{ userId: string; displayName: string; discoveredAt: Date } | null> {
-    const rows = await db
-      .select()
-      .from(animeDiscovery)
-      .where(eq(animeDiscovery.malId, malId));
-    if (!rows[0]) return null;
-    return {
-      userId: rows[0].discoveredByUserId,
-      displayName: rows[0].discoveredByDisplayName,
-      discoveredAt: rows[0].discoveredAt,
-    };
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(animeDiscovery)
+        .where(eq(animeDiscovery.malId, malId))
+        .then((rows) => {
+          if (!rows[0]) return null;
+          return {
+            userId: rows[0].discoveredByUserId,
+            displayName: rows[0].discoveredByDisplayName,
+            discoveredAt: rows[0].discoveredAt,
+          };
+        })
+    );
   }
 
   async setDisplayName(userId: string, displayName: string): Promise<void> {
-    try {
-      await db
+    return this.withRetry(() =>
+      db
         .insert(userProfiles)
         .values({ userId, displayName })
         .onConflictDoUpdate({
           target: userProfiles.userId,
           set: { displayName },
-        });
-    } catch (err) {
-      console.error("[DB] setDisplayName failed:", err);
-      throw err;
-    }
+        })
+        .then(() => undefined)
+    );
   }
 
   async getDisplayName(userId: string): Promise<string | null> {
-    const rows = await db
-      .select()
-      .from(userProfiles)
-      .where(eq(userProfiles.userId, userId));
-    return rows[0]?.displayName ?? null;
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(userProfiles)
+        .where(eq(userProfiles.userId, userId))
+        .then((rows) => rows[0]?.displayName ?? null)
+    );
   }
 }
 

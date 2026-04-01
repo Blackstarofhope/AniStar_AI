@@ -366,7 +366,7 @@ export default function HomeScreen() {
         scrollIndicatorInsets={{ bottom: insets.bottom }}
         data={animeList}
         renderItem={renderItem}
-        keyExtractor={(item) => item.mal_id.toString()}
+        keyExtractor={(item, index) => `${item.mal_id}-${index}`}
         ListEmptyComponent={renderEmpty}
         refreshControl={
           <RefreshControl
