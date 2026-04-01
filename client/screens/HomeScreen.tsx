@@ -1,4 +1,4 @@
-import React, { useState, useLayoutEffect } from "react";
+import React, { useState, useLayoutEffect, useMemo } from "react";
 import {
   FlatList, View, StyleSheet, RefreshControl, ScrollView, Pressable,
   Modal, TextInput, ActivityIndicator, Platform, KeyboardAvoidingView,
@@ -143,6 +143,16 @@ export default function HomeScreen() {
     queryFn: () => fetchAnimeSchedule(DAYS[selectedDay]),
     staleTime: 5 * 60 * 1000,
   });
+
+  const uniqueAnimeList = useMemo(() => {
+    if (!animeList) return [];
+    const seen = new Set<number>();
+    return animeList.filter((item) => {
+      if (seen.has(item.mal_id)) return false;
+      seen.add(item.mal_id);
+      return true;
+    });
+  }, [animeList]);
 
   const handleAnimePress = (anime: AnimeItem) => {
     navigation.navigate("AnimeDetail", {
@@ -364,7 +374,7 @@ export default function HomeScreen() {
           flexGrow: 1,
         }}
         scrollIndicatorInsets={{ bottom: insets.bottom }}
-        data={animeList}
+        data={uniqueAnimeList}
         renderItem={renderItem}
         keyExtractor={(item, index) => `${item.mal_id}-${index}`}
         ListEmptyComponent={renderEmpty}
