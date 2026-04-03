@@ -310,6 +310,32 @@ function buildRecommendationItem(
 
 const UNVERIFIED: { verified: boolean; score: number; visionEmbedding: number[] } = { verified: false, score: 0, visionEmbedding: [] };
 
+// ---------------------------------------------------------------------------
+// Shared hard-filter helper — deduplicates filter logic between both rec paths
+// ---------------------------------------------------------------------------
+type BanRow = { malId: number | null; bannedGenre: string | null };
+
+function applyHardFilters(
+  rawAnimeList: AnimeScheduleItem[],
+  bans: BanRow[],
+  seenIds: Set<number>
+): { filtered: AnimeScheduleItem[]; bannedMalIds: Set<number>; bannedGenreSet: Set<string> } {
+  const bannedMalIds = new Set<number>(
+    bans.filter((b) => b.malId !== null).map((b) => b.malId!)
+  );
+  const bannedGenreSet = new Set<string>(
+    bans.filter((b) => b.bannedGenre !== null).map((b) => b.bannedGenre!)
+  );
+  const filtered = rawAnimeList.filter((anime) => {
+    if (bannedMalIds.has(anime.mal_id)) return false;
+    if (seenIds.has(anime.mal_id)) return false;
+    const genres = (anime.genres ?? []).map((g) => g.name);
+    if (genres.length > 0 && genres.every((g) => bannedGenreSet.has(g))) return false;
+    return true;
+  });
+  return { filtered, bannedMalIds, bannedGenreSet };
+}
+
 async function scoreAnimeList(
   eng: ReturnType<typeof getEngine>,
   animeList: AnimeScheduleItem[],
@@ -370,20 +396,7 @@ export async function getRecommendations(userId: string, limit = 10, deadlineMs 
     ]);
     if (rawAnimeList.length === 0) return [];
 
-    const bannedMalIds = new Set<number>(
-      bans.filter((b) => b.malId !== null).map((b) => b.malId!)
-    );
-    const bannedGenreSet = new Set<string>(
-      bans.filter((b) => b.bannedGenre !== null).map((b) => b.bannedGenre!)
-    );
-
-    const animeList = rawAnimeList.filter((anime) => {
-      if (bannedMalIds.has(anime.mal_id)) return false;
-      if (seenIds.has(anime.mal_id)) return false;
-      const genres = (anime.genres ?? []).map((g) => g.name);
-      if (genres.length > 0 && genres.every((g) => bannedGenreSet.has(g))) return false;
-      return true;
-    });
+    const { filtered: animeList } = applyHardFilters(rawAnimeList, bans, seenIds);
 
     const userPref = buildUserPreferenceVector(
       eng.ratings.map((r) => ({ embedding: r.embedding, rating: r.rating }))
@@ -478,151 +491,179 @@ export async function getThreeLaneRecommendations(
 ): Promise<ThreeLaneRecommendations> {
   const eng = await getEngine(userId);
   const deadline = Date.now() + deadlineMs;
+  const emptyResult: ThreeLaneRecommendations = { safe: [], stretch: [], blind: [] };
 
-  const [rawAnimeList, bans, seenIds, hiddenGemBias] = await Promise.all([
-    getAllCurrentAnime(),
-    storage.getUserBans(userId),
-    storage.getWatchedMalIds(userId),
-    storage.getHiddenGemBias(userId),
-  ]);
-
-  const bannedMalIds = new Set<number>(
-    bans.filter((b) => b.malId !== null).map((b) => b.malId!)
-  );
-  const bannedGenreSet = new Set<string>(
-    bans.filter((b) => b.bannedGenre !== null).map((b) => b.bannedGenre!)
-  );
-
-  const animeList = rawAnimeList.filter((anime) => {
-    if (bannedMalIds.has(anime.mal_id)) return false;
-    if (seenIds.has(anime.mal_id)) return false;
-    const genres = (anime.genres ?? []).map((g) => g.name);
-    if (genres.length > 0 && genres.every((g) => bannedGenreSet.has(g))) return false;
-    return true;
-  });
-
-  if (animeList.length === 0) return { safe: [], stretch: [], blind: [] };
-
-  const userPref = buildUserPreferenceVector(
-    eng.ratings.map((r) => ({ embedding: r.embedding, rating: r.rating }))
-  );
-
-  // Build liked genre set from historical positive ratings
-  const animeGenreMap = new Map<number, string[]>();
-  for (const a of rawAnimeList) {
-    animeGenreMap.set(a.mal_id, (a.genres ?? []).map((g) => g.name));
-  }
-  const likedGenreSet = new Set<string>();
-  for (const r of eng.ratings) {
-    if (r.rating > 0.5) {
-      const genres = animeGenreMap.get(r.animeId);
-      if (genres) for (const g of genres) likedGenreSet.add(g);
-    }
-  }
-
-  const scored = await scoreAnimeList(eng, animeList, userPref, 50, hiddenGemBias);
-
-  // Classify into lanes — check BLIND first (broadest exclusion), then SAFE, then STRETCH
-  type ScoredItem = typeof scored[0];
-  const safePool: ScoredItem[] = [];
-  const stretchPool: ScoredItem[] = [];
-  const blindPool: ScoredItem[] = [];
-
-  for (const item of scored) {
-    const genres = (item.anime.genres ?? []).map((g) => g.name);
-    const genreNovelty = genres.filter((g) => !likedGenreSet.has(g)).length;
-    if (item.cosSim < 0.3 || genreNovelty >= 2) {
-      blindPool.push(item);
-    } else if (item.cosSim > 0.6 && genreNovelty === 0) {
-      safePool.push(item);
-    } else {
-      stretchPool.push(item);
-    }
-  }
-
-  safePool.sort((a, b) => b.score - a.score);
-  stretchPool.sort((a, b) => b.score - a.score);
-  blindPool.sort((a, b) => b.ffScore - a.ffScore);
-
-  let safeItems = safePool.slice(0, 3);
-  let stretchItems = stretchPool.slice(0, 3);
-  let blindItems = blindPool.slice(0, 2);
-
-  // Fill empty lanes from the nearest overflow
-  if (safeItems.length === 0) safeItems = stretchPool.slice(3, 6);
-  if (stretchItems.length === 0) stretchItems = safePool.slice(3, 6);
-  if (blindItems.length === 0) blindItems = stretchPool.slice(3, 5);
-
-  // Verification with deadline
-  const allItems = [...safeItems, ...stretchItems, ...blindItems];
-  const verificationMap = new Map<number, { verified: boolean; score: number; visionEmbedding: number[] }>();
-  const verificationPromises = allItems.map(async ({ anime }) => {
-    try {
-      const v = await verifyArtwork(anime.mal_id, anime.images?.jpg?.large_image_url || "", anime.title);
-      verificationMap.set(anime.mal_id, { ...v, visionEmbedding: v.visionEmbedding ?? [] });
-      if (v.visionEmbedding && v.visionEmbedding.length > 0) {
-        alignVisionPhasesToEmbedding(eng.kuramoto, v.visionEmbedding);
-      }
-    } catch {
-      verificationMap.set(anime.mal_id, UNVERIFIED);
-    }
-  });
-
-  const verifyRemaining = deadline - Date.now();
-  if (verifyRemaining > 0) {
-    await Promise.race([
-      Promise.all(verificationPromises),
-      new Promise<void>((resolve) => setTimeout(resolve, verifyRemaining)),
+  const coreWork = async (): Promise<ThreeLaneRecommendations> => {
+    const [rawAnimeList, bans, seenIds, hiddenGemBias] = await Promise.all([
+      getAllCurrentAnime(),
+      storage.getUserBans(userId),
+      storage.getWatchedMalIds(userId),
+      storage.getHiddenGemBias(userId),
     ]);
-  }
 
-  stepKuramoto(eng.kuramoto, 3);
-  updateOrderHistory(eng.kuramoto);
+    // Issue 2: shared filter helper — same logic as getRecommendations
+    const { filtered: animeList } = applyHardFilters(rawAnimeList, bans, seenIds);
+    if (animeList.length === 0) return emptyResult;
 
-  function buildReason(item: ScoredItem, lane: string): string {
-    const genres = (item.anime.genres ?? []).map((g) => g.name);
-    const cachedVibe = getVibeProfileFromCache(item.anime.mal_id);
-    if (lane === "safe") {
-      const matchingGenres = genres.filter((g) => likedGenreSet.has(g));
-      const topGenres = matchingGenres.slice(0, 2).join(" & ");
-      return `Matches your taste in ${topGenres || "your favourite genres"}`;
+    const userPref = buildUserPreferenceVector(
+      eng.ratings.map((r) => ({ embedding: r.embedding, rating: r.rating }))
+    );
+
+    // Build liked genre set from historical positive ratings
+    const animeGenreMap = new Map<number, string[]>();
+    for (const a of rawAnimeList) {
+      animeGenreMap.set(a.mal_id, (a.genres ?? []).map((g) => g.name));
     }
-    if (lane === "stretch") {
-      const unfamiliar = genres.find((g) => !likedGenreSet.has(g)) ?? genres[0] ?? "new territory";
-      const vibeAttr = cachedVibe?.atmosphere ?? "vibe";
-      return `New territory — ${unfamiliar} — but the ${vibeAttr} aligns with what you love`;
+    const likedGenreSet = new Set<string>();
+    for (const r of eng.ratings) {
+      if (r.rating > 0.5) {
+        const genres = animeGenreMap.get(r.animeId);
+        if (genres) for (const g of genres) likedGenreSet.add(g);
+      }
     }
-    const vibeAttr = cachedVibe?.atmosphere ?? "something unexpected";
-    return `This one's a gamble. The vibe says ${vibeAttr} — trust it or skip it`;
-  }
 
-  function toRecommendations(items: ScoredItem[], lane: string): Recommendation[] {
-    return items.map((item) => {
-      const verification = verificationMap.get(item.anime.mal_id) ?? UNVERIFIED;
-      const rec = buildRecommendationItem(item.anime, item.score, verification);
-      rec.lane = lane;
-      rec.reason = buildReason(item, lane);
-      return rec;
+    const scored = await scoreAnimeList(eng, animeList, userPref, 50, hiddenGemBias);
+    if (scored.length === 0) return emptyResult;
+
+    type ScoredItem = typeof scored[0];
+    let safeItems: ScoredItem[];
+    let stretchItems: ScoredItem[];
+    let blindItems: ScoredItem[];
+
+    // Issue 1: cold-start — cosine similarity is meaningless with < 3 ratings,
+    // so the preference vector is near-zero and everything would score cosSim ≈ 0.
+    // Use a positional fallback instead of lane classification.
+    const isColdStart = eng.ratings.length < 3;
+
+    if (isColdStart) {
+      safeItems = scored.slice(0, 3);
+      stretchItems = scored.slice(3, 6);
+      // 2 random picks from the bottom half for the "blind" surprise lane
+      const bottomHalf = scored.slice(Math.floor(scored.length / 2));
+      const shuffled = [...bottomHalf].sort(() => Math.random() - 0.5);
+      blindItems = shuffled.slice(0, 2);
+    } else {
+      // Classify into lanes — BLIND first (broadest exclusion), then SAFE, then STRETCH
+      const safePool: ScoredItem[] = [];
+      const stretchPool: ScoredItem[] = [];
+      const blindPool: ScoredItem[] = [];
+
+      for (const item of scored) {
+        const genres = (item.anime.genres ?? []).map((g) => g.name);
+        // Issue 4: if the user has no positive ratings yet, likedGenreSet is empty
+        // and every genre looks novel. Treat novelty = 0 so items go to safe/stretch
+        // based on cosine similarity alone, instead of all collapsing into blind.
+        const genreNovelty =
+          likedGenreSet.size === 0
+            ? 0
+            : genres.filter((g) => !likedGenreSet.has(g)).length;
+
+        if (item.cosSim < 0.3 || genreNovelty >= 2) {
+          blindPool.push(item);
+        } else if (item.cosSim > 0.6 && genreNovelty === 0) {
+          safePool.push(item);
+        } else {
+          stretchPool.push(item);
+        }
+      }
+
+      safePool.sort((a, b) => b.score - a.score);
+      stretchPool.sort((a, b) => b.score - a.score);
+      blindPool.sort((a, b) => b.ffScore - a.ffScore);
+
+      safeItems = safePool.slice(0, 3);
+      stretchItems = stretchPool.slice(0, 3);
+      blindItems = blindPool.slice(0, 2);
+
+      // Fill empty lanes from nearest overflow
+      if (safeItems.length === 0) safeItems = stretchPool.slice(3, 6);
+      if (stretchItems.length === 0) stretchItems = safePool.slice(3, 6);
+      if (blindItems.length === 0) blindItems = stretchPool.slice(3, 5);
+    }
+
+    // Issue 5: verification respects the same deadline pattern as getRecommendations
+    const allItems = [...safeItems, ...stretchItems, ...blindItems];
+    const verificationMap = new Map<number, { verified: boolean; score: number; visionEmbedding: number[] }>();
+    const verificationPromises = allItems.map(async ({ anime }) => {
+      try {
+        const v = await verifyArtwork(anime.mal_id, anime.images?.jpg?.large_image_url || "", anime.title);
+        verificationMap.set(anime.mal_id, { ...v, visionEmbedding: v.visionEmbedding ?? [] });
+        if (v.visionEmbedding && v.visionEmbedding.length > 0) {
+          alignVisionPhasesToEmbedding(eng.kuramoto, v.visionEmbedding);
+        }
+      } catch {
+        verificationMap.set(anime.mal_id, UNVERIFIED);
+      }
     });
-  }
 
-  const safe = toRecommendations(safeItems, "safe");
-  const stretch = toRecommendations(stretchItems, "stretch");
-  const blind = toRecommendations(blindItems, "blind");
-
-  // Attach discovery attribution
-  const allRecs = [...safe, ...stretch, ...blind];
-  const discoveryResults = await Promise.allSettled(
-    allRecs.map((r) => storage.getDiscovery(r.mal_id))
-  );
-  for (let i = 0; i < allRecs.length; i++) {
-    const d = discoveryResults[i];
-    if (d.status === "fulfilled" && d.value) {
-      allRecs[i].discoveredBy = { userId: d.value.userId, displayName: d.value.displayName };
+    const verifyRemaining = deadline - Date.now();
+    if (verifyRemaining > 0) {
+      await Promise.race([
+        Promise.all(verificationPromises),
+        new Promise<void>((resolve) => setTimeout(resolve, verifyRemaining)),
+      ]);
     }
-  }
 
-  return { safe, stretch, blind };
+    stepKuramoto(eng.kuramoto, 3);
+    updateOrderHistory(eng.kuramoto);
+
+    function buildReason(item: ScoredItem, lane: string): string {
+      const genres = (item.anime.genres ?? []).map((g) => g.name);
+      const cachedVibe = getVibeProfileFromCache(item.anime.mal_id);
+      if (lane === "safe") {
+        const matchingGenres = genres.filter((g) => likedGenreSet.has(g));
+        const topGenres = matchingGenres.slice(0, 2).join(" & ");
+        return `Matches your taste in ${topGenres || "your favourite genres"}`;
+      }
+      if (lane === "stretch") {
+        const unfamiliar = genres.find((g) => !likedGenreSet.has(g)) ?? genres[0] ?? "new territory";
+        const vibeAttr = cachedVibe?.atmosphere ?? "vibe";
+        return `New territory — ${unfamiliar} — but the ${vibeAttr} aligns with what you love`;
+      }
+      const vibeAttr = cachedVibe?.atmosphere ?? "something unexpected";
+      return `This one's a gamble. The vibe says ${vibeAttr} — trust it or skip it`;
+    }
+
+    function toRecommendations(items: ScoredItem[], lane: string): Recommendation[] {
+      return items.map((item) => {
+        const verification = verificationMap.get(item.anime.mal_id) ?? UNVERIFIED;
+        const rec = buildRecommendationItem(item.anime, item.score, verification);
+        rec.lane = lane;
+        rec.reason = buildReason(item, lane);
+        return rec;
+      });
+    }
+
+    const safe = toRecommendations(safeItems, "safe");
+    const stretch = toRecommendations(stretchItems, "stretch");
+    const blind = toRecommendations(blindItems, "blind");
+
+    // Attach discovery attribution
+    const allRecs = [...safe, ...stretch, ...blind];
+    const discoveryResults = await Promise.allSettled(
+      allRecs.map((r) => storage.getDiscovery(r.mal_id))
+    );
+    for (let i = 0; i < allRecs.length; i++) {
+      const d = discoveryResults[i];
+      if (d.status === "fulfilled" && d.value) {
+        allRecs[i].discoveredBy = { userId: d.value.userId, displayName: d.value.displayName };
+      }
+    }
+
+    return { safe, stretch, blind };
+  };
+
+  // Issue 5: full deadline guard — if the entire coreWork is still running when
+  // the deadline fires, return empty lanes rather than hanging the HTTP response.
+  const timeoutGuard = new Promise<ThreeLaneRecommendations>((resolve) => {
+    setTimeout(() => {
+      stepKuramoto(eng.kuramoto, 3);
+      updateOrderHistory(eng.kuramoto);
+      resolve(emptyResult);
+    }, Math.max(0, deadline - Date.now()));
+  });
+
+  return Promise.race([coreWork(), timeoutGuard]);
 }
 
 export async function processFeedback(
