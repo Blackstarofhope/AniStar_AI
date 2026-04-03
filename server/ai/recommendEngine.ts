@@ -28,7 +28,6 @@ import {
 import { cosineSim, normalize } from "./matrix.js";
 import { getAllCurrentAnime, type AnimeScheduleItem } from "./animeData.js";
 import { generateVibeProfile, getVibeProfileFromCache } from "./vibeProfiler.js";
-import { storage } from "../storage.js";
 
 const LAYER_SIZES = [EMBEDDING_DIM, 256, 128, 64];
 const KURAMOTO_SIZE = 256;
@@ -351,8 +350,27 @@ export async function getRecommendations(userId: string, limit = 10, deadlineMs 
   const partialResults: Recommendation[] = [];
 
   const coreWork = async (): Promise<Recommendation[]> => {
-    const animeList = await getAllCurrentAnime();
-    if (animeList.length === 0) return [];
+    const [rawAnimeList, bans, seenIds] = await Promise.all([
+      getAllCurrentAnime(),
+      storage.getUserBans(userId),
+      storage.getWatchedMalIds(userId),
+    ]);
+    if (rawAnimeList.length === 0) return [];
+
+    const bannedMalIds = new Set<number>(
+      bans.filter((b) => b.malId !== null).map((b) => b.malId!)
+    );
+    const bannedGenreSet = new Set<string>(
+      bans.filter((b) => b.bannedGenre !== null).map((b) => b.bannedGenre!)
+    );
+
+    const animeList = rawAnimeList.filter((anime) => {
+      if (bannedMalIds.has(anime.mal_id)) return false;
+      if (seenIds.has(anime.mal_id)) return false;
+      const genres = (anime.genres ?? []).map((g) => g.name);
+      if (genres.length > 0 && genres.every((g) => bannedGenreSet.has(g))) return false;
+      return true;
+    });
 
     const userPref = buildUserPreferenceVector(
       eng.ratings.map((r) => ({ embedding: r.embedding, rating: r.rating }))
