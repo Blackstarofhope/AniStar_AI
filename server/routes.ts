@@ -331,6 +331,105 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.post("/api/user/ban", async (req: Request, res: Response) => {
+    const userId = extractUserId(req);
+    const { malId, bannedGenre, bannedTrope, reason } = req.body as {
+      malId?: number; bannedGenre?: string; bannedTrope?: string; reason?: string;
+    };
+    if (malId === undefined && !bannedGenre && !bannedTrope) {
+      return res.status(400).json({ error: "At least one of malId, bannedGenre, or bannedTrope is required" });
+    }
+    try {
+      await storage.addBan(userId, { malId, bannedGenre, bannedTrope, reason });
+      res.json({ success: true });
+    } catch (e) {
+      console.error("[User] addBan error:", e);
+      res.status(500).json({ error: "Failed to add ban" });
+    }
+  });
+
+  app.delete("/api/user/ban/:id", async (req: Request, res: Response) => {
+    const userId = extractUserId(req);
+    const banId = parseInt(req.params.id, 10);
+    if (isNaN(banId)) {
+      return res.status(400).json({ error: "Invalid ban id" });
+    }
+    try {
+      await storage.removeBan(userId, banId);
+      res.json({ success: true });
+    } catch (e) {
+      console.error("[User] removeBan error:", e);
+      res.status(500).json({ error: "Failed to remove ban" });
+    }
+  });
+
+  app.get("/api/user/bans", async (req: Request, res: Response) => {
+    const userId = extractUserId(req);
+    try {
+      const bans = await storage.getUserBans(userId);
+      res.json(bans);
+    } catch (e) {
+      console.error("[User] getUserBans error:", e);
+      res.status(500).json({ error: "Failed to get bans" });
+    }
+  });
+
+  app.post("/api/user/watchstate", async (req: Request, res: Response) => {
+    const userId = extractUserId(req);
+    const { malId, state } = req.body as { malId?: number; state?: string };
+    if (typeof malId !== "number") {
+      return res.status(400).json({ error: "malId is required" });
+    }
+    const validStates = ["completed", "watching", "dropped", "planned"];
+    if (typeof state !== "string" || !validStates.includes(state)) {
+      return res.status(400).json({ error: `state must be one of: ${validStates.join(", ")}` });
+    }
+    try {
+      await storage.setWatchState(userId, malId, state);
+      res.json({ success: true });
+    } catch (e) {
+      console.error("[User] setWatchState error:", e);
+      res.status(500).json({ error: "Failed to set watch state" });
+    }
+  });
+
+  app.get("/api/user/watchstates", async (req: Request, res: Response) => {
+    const userId = extractUserId(req);
+    try {
+      const states = await storage.getUserWatchStates(userId);
+      res.json(states);
+    } catch (e) {
+      console.error("[User] getUserWatchStates error:", e);
+      res.status(500).json({ error: "Failed to get watch states" });
+    }
+  });
+
+  app.post("/api/user/preferences", async (req: Request, res: Response) => {
+    const userId = extractUserId(req);
+    const { hiddenGemBias } = req.body as { hiddenGemBias?: number };
+    if (typeof hiddenGemBias !== "number") {
+      return res.status(400).json({ error: "hiddenGemBias must be a number" });
+    }
+    try {
+      await storage.setHiddenGemBias(userId, hiddenGemBias);
+      res.json({ success: true });
+    } catch (e) {
+      console.error("[User] setHiddenGemBias error:", e);
+      res.status(500).json({ error: "Failed to set preferences" });
+    }
+  });
+
+  app.get("/api/user/preferences", async (req: Request, res: Response) => {
+    const userId = extractUserId(req);
+    try {
+      const hiddenGemBias = await storage.getHiddenGemBias(userId);
+      res.json({ hiddenGemBias });
+    } catch (e) {
+      console.error("[User] getHiddenGemBias error:", e);
+      res.status(500).json({ error: "Failed to get preferences" });
+    }
+  });
+
   const httpServer = createServer(app);
 
   testConnection();

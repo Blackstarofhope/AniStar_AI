@@ -1,9 +1,10 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import {
   users, userEngineState, animeSearched, vibeProfiles,
   userRatings, animeDiscovery, userProfiles,
+  userBanList, userWatchState, userPreferences,
   type InsertUser, type User,
 } from "@shared/schema";
 
@@ -59,6 +60,18 @@ export interface IStorage {
   getDisplayName(userId: string): Promise<string | null>;
   isDisplayNameTaken(displayName: string, excludeUserId: string): Promise<boolean>;
   loginWithDisplayName(displayName: string, pin: string): Promise<string | null>;
+
+  addBan(userId: string, ban: { malId?: number; bannedGenre?: string; bannedTrope?: string; reason?: string }): Promise<void>;
+  removeBan(userId: string, banId: number): Promise<void>;
+  getUserBans(userId: string): Promise<{ id: number; malId: number | null; bannedGenre: string | null; bannedTrope: string | null; reason: string | null }[]>;
+  isAnimeBanned(userId: string, malId: number, genres: string[]): Promise<boolean>;
+
+  setWatchState(userId: string, malId: number, state: string): Promise<void>;
+  getUserWatchStates(userId: string): Promise<{ malId: number; state: string }[]>;
+  getWatchedMalIds(userId: string): Promise<Set<number>>;
+
+  setHiddenGemBias(userId: string, bias: number): Promise<void>;
+  getHiddenGemBias(userId: string): Promise<number>;
 }
 
 class PostgresStorage implements IStorage {
@@ -274,6 +287,128 @@ class PostgresStorage implements IStorage {
           const match = rows.find((r) => r.pin === pin);
           return match?.userId ?? null;
         })
+    );
+  }
+
+  async addBan(
+    userId: string,
+    ban: { malId?: number; bannedGenre?: string; bannedTrope?: string; reason?: string }
+  ): Promise<void> {
+    return this.withRetry(() =>
+      db
+        .insert(userBanList)
+        .values({
+          userId,
+          malId: ban.malId ?? null,
+          bannedGenre: ban.bannedGenre ?? null,
+          bannedTrope: ban.bannedTrope ?? null,
+          reason: ban.reason ?? null,
+        })
+        .onConflictDoNothing()
+        .then(() => undefined)
+    );
+  }
+
+  async removeBan(userId: string, banId: number): Promise<void> {
+    return this.withRetry(() =>
+      db
+        .delete(userBanList)
+        .where(and(eq(userBanList.id, banId), eq(userBanList.userId, userId)))
+        .then(() => undefined)
+    );
+  }
+
+  async getUserBans(userId: string): Promise<{ id: number; malId: number | null; bannedGenre: string | null; bannedTrope: string | null; reason: string | null }[]> {
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(userBanList)
+        .where(eq(userBanList.userId, userId))
+        .then((rows) =>
+          rows.map((r) => ({
+            id: r.id,
+            malId: r.malId,
+            bannedGenre: r.bannedGenre,
+            bannedTrope: r.bannedTrope,
+            reason: r.reason,
+          }))
+        )
+    );
+  }
+
+  async isAnimeBanned(userId: string, malId: number, genres: string[]): Promise<boolean> {
+    return this.withRetry(async () => {
+      const bans = await db
+        .select()
+        .from(userBanList)
+        .where(eq(userBanList.userId, userId));
+      return bans.some(
+        (b) =>
+          b.malId === malId ||
+          (b.bannedGenre !== null && genres.includes(b.bannedGenre))
+      );
+    });
+  }
+
+  async setWatchState(userId: string, malId: number, state: string): Promise<void> {
+    return this.withRetry(() =>
+      db
+        .insert(userWatchState)
+        .values({ userId, malId, state, updatedAt: new Date() })
+        .onConflictDoUpdate({
+          target: [userWatchState.userId, userWatchState.malId],
+          set: { state, updatedAt: new Date() },
+        })
+        .then(() => undefined)
+    );
+  }
+
+  async getUserWatchStates(userId: string): Promise<{ malId: number; state: string }[]> {
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(userWatchState)
+        .where(eq(userWatchState.userId, userId))
+        .then((rows) => rows.map((r) => ({ malId: r.malId, state: r.state })))
+    );
+  }
+
+  async getWatchedMalIds(userId: string): Promise<Set<number>> {
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(userWatchState)
+        .where(
+          and(
+            eq(userWatchState.userId, userId),
+            inArray(userWatchState.state, ["completed", "dropped"])
+          )
+        )
+        .then((rows) => new Set(rows.map((r) => r.malId)))
+    );
+  }
+
+  async setHiddenGemBias(userId: string, bias: number): Promise<void> {
+    const clamped = Math.max(0, Math.min(1, bias));
+    return this.withRetry(() =>
+      db
+        .insert(userPreferences)
+        .values({ userId, hiddenGemBias: clamped, updatedAt: new Date() })
+        .onConflictDoUpdate({
+          target: userPreferences.userId,
+          set: { hiddenGemBias: clamped, updatedAt: new Date() },
+        })
+        .then(() => undefined)
+    );
+  }
+
+  async getHiddenGemBias(userId: string): Promise<number> {
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(userPreferences)
+        .where(eq(userPreferences.userId, userId))
+        .then((rows) => rows[0]?.hiddenGemBias ?? 0.5)
     );
   }
 }
