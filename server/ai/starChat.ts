@@ -6,7 +6,7 @@ import {
   extractChatSignals, generateStarResponse, filterByGenres,
   STAR_NAME, STAR_BIO, type ChatSignals,
 } from "./starPersonality.js";
-import { STAR_SYSTEM_PROMPT } from "./starPrompt.js";
+import { buildStarSystemPrompt } from "./starPrompt.js";
 import { processFeedback, getTopAnimeByGenres, addAnimeEmbeddings } from "./recommendEngine.js";
 import { embedAnimeWithFallback, type AnimeInfo } from "./textEmbedder.js";
 import {
@@ -142,12 +142,14 @@ async function extractTitleViaLLM(message: string): Promise<string | null> {
 async function callClaude(
   userMessage: string,
   history: ChatMessage[],
+  userId: string,
+  displayName: string,
   searchContext?: string
 ): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
 
-  let systemPrompt = STAR_SYSTEM_PROMPT;
+  let systemPrompt = await buildStarSystemPrompt(userId, displayName);
   if (searchContext) systemPrompt += "\n\n## Context for this message\n" + searchContext;
 
   const messages = [
@@ -186,6 +188,8 @@ export async function processChat(
 ): Promise<ChatResponse> {
   // Retry any discovery records that failed on a previous call.
   await flushPendingDiscoveries();
+
+  const displayName = await storage.getDisplayName(userId).catch(() => null) ?? userId;
 
   const catalog = await getAllCurrentAnime();
   const catalogTitles = catalog.map((a) => a.title);
@@ -286,7 +290,6 @@ export async function processChat(
           await addAnimeEmbeddings(userId, entries);
         }
         // Record discovery attribution for each new anime.
-        const displayName = await storage.getDisplayName(userId).catch(() => null) ?? userId;
         for (const a of searchResults) {
           try {
             await storage.recordDiscovery(a.mal_id, userId, displayName);
@@ -340,7 +343,7 @@ export async function processChat(
     }
   }
 
-  const claudeResponse = await callClaude(message, history, searchContext);
+  const claudeResponse = await callClaude(message, history, userId, displayName, searchContext);
   const response = claudeResponse ?? generateStarResponse(signals, matches, noMatchFallbacks, historyLength);
 
   const implicitFeedback =
