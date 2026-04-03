@@ -306,7 +306,8 @@ async function scoreAnimeList(
   eng: ReturnType<typeof getEngine>,
   animeList: AnimeScheduleItem[],
   userPref: number[],
-  limit: number
+  limit: number,
+  hiddenGemBias: number
 ): Promise<{ anime: AnimeScheduleItem; score: number; embedding: number[] }[]> {
   const scored: { anime: AnimeScheduleItem; score: number; embedding: number[] }[] = [];
 
@@ -332,7 +333,10 @@ async function scoreAnimeList(
         const ffScore = infer(eng.network, finalEmbedding);
         const cosSim = cosineSim(finalEmbedding, userPref);
         const combinedScore = 0.6 * Math.tanh(ffScore / 5) + 0.4 * (cosSim + 1) / 2;
-        scored.push({ anime, score: combinedScore, embedding });
+        const popularityFactor = anime.score ? (anime.score / 10) : 0.5;
+        const biasAdjustment = (hiddenGemBias - 0.5) * 0.4;
+        const adjustedScore = combinedScore - (biasAdjustment * popularityFactor) + (biasAdjustment * (1 - popularityFactor));
+        scored.push({ anime, score: adjustedScore, embedding });
       } catch {
         return;
       }
@@ -350,10 +354,11 @@ export async function getRecommendations(userId: string, limit = 10, deadlineMs 
   const partialResults: Recommendation[] = [];
 
   const coreWork = async (): Promise<Recommendation[]> => {
-    const [rawAnimeList, bans, seenIds] = await Promise.all([
+    const [rawAnimeList, bans, seenIds, hiddenGemBias] = await Promise.all([
       getAllCurrentAnime(),
       storage.getUserBans(userId),
       storage.getWatchedMalIds(userId),
+      storage.getHiddenGemBias(userId),
     ]);
     if (rawAnimeList.length === 0) return [];
 
@@ -376,7 +381,7 @@ export async function getRecommendations(userId: string, limit = 10, deadlineMs 
       eng.ratings.map((r) => ({ embedding: r.embedding, rating: r.rating }))
     );
 
-    const topAnime = await scoreAnimeList(eng, animeList, userPref, limit);
+    const topAnime = await scoreAnimeList(eng, animeList, userPref, limit, hiddenGemBias);
 
     for (const { anime, score } of topAnime) {
       partialResults.push(buildRecommendationItem(anime, score, UNVERIFIED));
