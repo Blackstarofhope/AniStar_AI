@@ -11,7 +11,7 @@ import {
   KeyboardAvoidingView,
   ActivityIndicator,
 } from "react-native";
-import Slider from "@react-native-community/slider";
+import GemSlider from "@/components/GemSlider";
 import { useHeaderHeight } from "@react-navigation/elements";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigation } from "@react-navigation/native";
@@ -633,17 +633,11 @@ export default function RecommendationsScreen() {
           </View>
           <View style={styles.sliderRow}>
             <ThemedText style={styles.sliderEndLabel}>Mainstream</ThemedText>
-            <Slider
+            <GemSlider
               style={styles.slider}
-              minimumValue={0}
-              maximumValue={1}
-              step={0.05}
               value={sliderValue}
               onValueChange={setSliderValue}
               onSlidingComplete={handleSliderComplete}
-              minimumTrackTintColor={Colors.dark.accent}
-              maximumTrackTintColor={Colors.dark.glassBorder}
-              thumbTintColor={Colors.dark.accent}
             />
             <ThemedText style={styles.sliderEndLabel}>Hidden Gems</ThemedText>
           </View>

@@ -64,6 +64,84 @@ async function flushPendingDiscoveries(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Ban detection — parse natural-language ban requests from chat messages
+// ---------------------------------------------------------------------------
+
+const BAN_PATTERNS: RegExp[] = [
+  /never\s+show\s+me\s+(?:any\s+more\s+|more\s+|any\s+)?(.+?)(?:\s+(?:again|anymore|please))?\s*$/i,
+  /i\s+never\s+want\s+to\s+see\s+(.+?)(?:\s+(?:again|anymore|please))?\s*$/i,
+  /(?:please\s+)?ban\s+(.+?)\s*$/i,
+  /(?:please\s+)?block\s+(.+?)(?:\s+(?:content|shows?|anime))?\s*$/i,
+  /i\s+hate\s+(.+?)(?:\s+(?:content|shows?|anime))?\s*$/i,
+  /no\s+more\s+(.+?)\s*$/i,
+  /remove\s+(.+?)\s+from\s+(?:my\s+)?(?:recommendations?|recs?|feed)\s*$/i,
+];
+
+/**
+ * Checks whether the user's message contains a ban request, extracts the
+ * subject (genre or anime title), persists it via storage.addBan, and
+ * returns the display name of what was banned (or null if no ban detected).
+ */
+async function detectAndApplyBan(
+  message: string,
+  userId: string,
+  catalog: AnimeScheduleItem[]
+): Promise<string | null> {
+  let extracted: string | null = null;
+
+  for (const pattern of BAN_PATTERNS) {
+    const match = message.match(pattern);
+    if (match?.[1]) {
+      extracted = match[1].trim().toLowerCase();
+      break;
+    }
+  }
+
+  if (!extracted) return null;
+
+  // Strip generic trailing words
+  extracted = extracted
+    .replace(/\s+(?:anime|shows?|content|stuff|things?|genres?)$/i, "")
+    .trim();
+
+  // Guard: ignore if too long (likely a sentence fragment) or too short
+  const wordCount = extracted.split(/\s+/).length;
+  if (wordCount > 5 || extracted.length < 2) return null;
+
+  // Title-case for display / storage
+  const titleCased = extracted
+    .split(" ")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+
+  // Check against current catalog for an exact or strong partial title match
+  const catalogMatch = catalog.find(
+    (a) =>
+      a.title.toLowerCase() === extracted ||
+      (extracted!.length > 5 && a.title.toLowerCase().includes(extracted!))
+  );
+
+  try {
+    if (catalogMatch) {
+      await storage.addBan(userId, {
+        malId: catalogMatch.mal_id,
+        reason: `Title: ${catalogMatch.title}`,
+      });
+      return catalogMatch.title;
+    } else {
+      await storage.addBan(userId, {
+        bannedGenre: titleCased,
+        reason: "banned via Star chat",
+      });
+      return titleCased;
+    }
+  } catch (e) {
+    console.warn("[Star] Ban detection: addBan failed:", e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Anthropic Claude API integration
 // ---------------------------------------------------------------------------
 
@@ -193,6 +271,14 @@ export async function processChat(
 
   const catalog = await getAllCurrentAnime();
   const catalogTitles = catalog.map((a) => a.title);
+
+  // Detect ban requests before anything else so the note can be injected into context
+  let chatBanNote: string | undefined;
+  const bannedViaChat = await detectAndApplyBan(message, userId, catalog);
+  if (bannedViaChat) {
+    chatBanNote = `User just banned "${bannedViaChat}" via chat. Acknowledge this naturally and warmly — confirm the ban is in effect and pivot toward finding something they will love instead.`;
+    console.log(`[Star] Ban added via chat for user=${userId}: "${bannedViaChat}"`);
+  }
 
   const signals = extractChatSignals(message, catalogTitles);
 
@@ -341,6 +427,11 @@ export async function processChat(
         }
       }
     }
+  }
+
+  // Prepend ban acknowledgment note so Claude handles it before any other context
+  if (chatBanNote) {
+    searchContext = searchContext ? `${chatBanNote}\n\n${searchContext}` : chatBanNote;
   }
 
   const claudeResponse = await callClaude(message, history, userId, displayName, searchContext);

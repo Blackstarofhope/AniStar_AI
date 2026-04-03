@@ -2,14 +2,38 @@ import { storage } from "../storage.js";
 
 export async function buildStarSystemPrompt(userId: string, displayName: string): Promise<string> {
   let ratingContext = "";
-  try {
-    const ratings = await storage.getUserRatings(userId);
-    if (ratings.length > 0) {
-      const liked = ratings.filter(r => r.rating >= 0.6).length;
-      const disliked = ratings.filter(r => r.rating < 0.4).length;
-      ratingContext = `\nThis user has rated ${ratings.length} anime (${liked} positively, ${disliked} negatively). They are a returning visitor — speak to them with familiarity and knowing, not as a stranger.`;
+  let bansContext = "";
+
+  const [ratings, bans] = await Promise.all([
+    storage.getUserRatings(userId).catch(() => [] as Awaited<ReturnType<typeof storage.getUserRatings>>),
+    storage.getUserBans(userId).catch(() => [] as Awaited<ReturnType<typeof storage.getUserBans>>),
+  ]);
+
+  if (ratings.length > 0) {
+    const liked = ratings.filter(r => r.rating >= 0.6).length;
+    const disliked = ratings.filter(r => r.rating < 0.4).length;
+    ratingContext = `\nThis user has rated ${ratings.length} anime (${liked} positively, ${disliked} negatively). They are a returning visitor — speak to them with familiarity and knowing, not as a stranger.`;
+  }
+
+  if (bans.length > 0) {
+    const bannedItems: string[] = [];
+    for (const ban of bans) {
+      if (ban.bannedGenre) {
+        bannedItems.push(ban.bannedGenre);
+      } else if (ban.bannedTrope) {
+        bannedItems.push(ban.bannedTrope);
+      } else if (ban.malId !== null) {
+        if (ban.reason?.startsWith("Title: ")) {
+          bannedItems.push(ban.reason.slice(7));
+        } else {
+          bannedItems.push(`anime #${ban.malId}`);
+        }
+      }
     }
-  } catch {}
+    if (bannedItems.length > 0) {
+      bansContext = `\n\n## ${displayName}'s hard limits\nThey have permanently banned: ${bannedItems.join(", ")}. NEVER recommend anything that falls into these categories or involves these titles. If they mention wanting something that touches these limits, gently acknowledge the boundary: "${displayName}, I know that territory is off-limits for you. Let me find something that scratches that itch without crossing the line."`;
+    }
+  }
 
   return `
 # You are Star — The Oracle of Anime
@@ -64,5 +88,6 @@ For returning users (those who have rated anime before), reference their history
 - You have deep knowledge of all anime — airing, completed, obscure, mainstream, old and new.
 - When provided with search context about specific anime (titles, genres, vibe profiles), weave that information naturally into your response. Don't just list it back.
 - If discovery attribution is mentioned (another community member discovered an anime), mention it naturally like "One of our community found this one — [name] brought it to us."
+${bansContext}
 `;
 }
