@@ -1,0 +1,39 @@
+Add new database tables and storage methods for user watch state and preference controls.
+
+1. In shared/schema.ts, add these tables:
+
+   - userBanList: id (serial primary key), userId (text not null), malId (integer, nullable), bannedGenre (text, nullable), bannedTrope (text, nullable), reason (text), createdAt (timestamp default now). Add a unique constraint on (userId, malId) for anime bans and (userId, bannedGenre) for genre bans.
+
+   - userWatchState: userId (text not null), malId (integer not null), state (text not null — one of "completed", "watching", "dropped", "planned"), updatedAt (timestamp default now). Primary key on (userId, malId).
+
+   - userPreferences: userId (text primary key), hiddenGemBias (real not null default 0.5), createdAt (timestamp default now), updatedAt (timestamp default now).
+
+2. In server/storage.ts, add these methods to the IStorage interface and PostgresStorage class:
+
+   - addBan(userId, { malId?, bannedGenre?, bannedTrope?, reason? }): Promise<void>
+   - removeBan(userId, banId): Promise<void>
+   - getUserBans(userId): Promise<{ id: number, malId: number | null, bannedGenre: string | null, bannedTrope: string | null, reason: string | null }[]>
+   - isAnimeBanned(userId, malId, genres: string[]): Promise<boolean> — returns true if the anime's malId is directly banned OR any of its genres match a bannedGenre for this user
+
+   - setWatchState(userId, malId, state): Promise<void> — upsert
+   - getUserWatchStates(userId): Promise<{ malId: number, state: string }[]>
+   - getWatchedMalIds(userId): Promise<Set<number>> — returns mal_ids where state is "completed" or "dropped"
+
+   - setHiddenGemBias(userId, bias: number): Promise<void> — clamp between 0 and 1
+   - getHiddenGemBias(userId): Promise<number> — default 0.5
+
+   Wrap all methods in withRetry.
+
+3. In server/routes.ts, add these endpoints:
+
+   - POST /api/user/ban — takes { malId?, bannedGenre?, reason? } + userId from extractUserId. Calls storage.addBan.
+   - DELETE /api/user/ban/:id — takes ban id from params + userId. Calls storage.removeBan.
+   - GET /api/user/bans — returns user's ban list from storage.getUserBans.
+   - POST /api/user/watchstate — takes { malId, state } + userId. Calls storage.setWatchState.
+   - GET /api/user/watchstates — returns user's watch states.
+   - POST /api/user/preferences — takes { hiddenGemBias } + userId. Calls storage.setHiddenGemBias.
+   - GET /api/user/preferences — returns { hiddenGemBias }.
+
+4. Run drizzle-kit push to create the tables.
+
+Do not modify any AI engine files or client files.
