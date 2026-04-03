@@ -1,0 +1,37 @@
+Redesign the recommendation output to return three lanes instead of a flat list.
+
+1. In server/ai/recommendEngine.ts:
+
+   Add a new exported interface:
+   export interface ThreeLaneRecommendations {
+     safe: Recommendation[];
+     stretch: Recommendation[];
+     blind: Recommendation[];
+   }
+
+   Add a new exported async function "getThreeLaneRecommendations(userId: string, deadlineMs = 15000): Promise<ThreeLaneRecommendations>" that:
+
+   a) Does the same hard filtering as getRecommendations (bans, seen, etc.)
+   b) Scores ALL remaining anime using scoreAnimeList (request a larger pool — top 50 instead of the usual limit)
+   c) For each scored anime, also compute:
+      - cosineSimilarity between its embedding and the userPref vector (you already have this in scoreAnimeList — extract it)
+      - A "genreNovelty" score: check which genres the user has rated positively before (from eng.ratings), and how many of this anime's genres are NOT in that set
+   d) Classify each scored anime into a lane:
+      - SAFE: cosine similarity to user pref > 0.6 AND genreNovelty == 0 (all genres are familiar). Sort by combined score descending. Take top 3.
+      - STRETCH: cosine similarity between 0.3 and 0.6 OR genreNovelty >= 1 (at least one unfamiliar genre). Sort by combined score descending. Take top 3.
+      - BLIND: cosine similarity < 0.3 OR genreNovelty >= 2. These are the wild cards. Sort by vibe alignment (if vibe profile exists, use the vibe component of the score; otherwise use FF goodness alone). Take top 2.
+   e) If any lane is empty, fill it from the next closest lane's overflow.
+   f) Each Recommendation in the response gets a new field: lane (string: "safe" | "stretch" | "blind")
+   g) Each Recommendation also gets a new field: reason (string) — a short explanation:
+      - Safe: "Matches your taste in [top matching genres]"
+      - Stretch: "New territory — [unfamiliar genre] — but the [vibe attribute] aligns with what you love"
+      - Blind: "This one's a gamble. The vibe says [vibe attribute] — trust it or skip it"
+
+2. Update the Recommendation interface to add: lane?: string; reason?: string;
+
+3. In server/routes.ts, add a new endpoint:
+   GET /api/ai/recommend/lanes — takes userId from extractUserId, calls getThreeLaneRecommendations, returns the ThreeLaneRecommendations object.
+
+4. Keep the existing GET /api/ai/recommend endpoint unchanged — it still returns a flat list for backward compatibility.
+
+Do not modify any client files.
