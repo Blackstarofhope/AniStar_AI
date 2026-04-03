@@ -430,6 +430,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/user/chat-usage", async (req: Request, res: Response) => {
+    const userId = extractUserId(req);
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const dayOfWeek = new Date().getDay();
+      const cap = dayOfWeek === 5 || dayOfWeek === 6 ? 10 : 5;
+      const count = await storage.getChatCount(userId, today);
+      res.json({ count, cap, remaining: Math.max(0, cap - count) });
+    } catch (e) {
+      console.error("[User] getChatCount error:", e);
+      res.status(500).json({ error: "Failed to get chat usage" });
+    }
+  });
+
   app.get("/api/user/preferences", async (req: Request, res: Response) => {
     const userId = extractUserId(req);
     try {

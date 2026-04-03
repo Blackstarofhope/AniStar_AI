@@ -84,6 +84,14 @@ export const userPreferences = pgTable("user_preferences", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+export const userChatUsage = pgTable("user_chat_usage", {
+  userId: text("user_id").notNull(),
+  date: text("date").notNull(),
+  messageCount: integer("message_count").notNull().default(0),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.userId, t.date] }),
+}));
+
 export const insertUserSchema = createInsertSchema(users).pick({
   username: true,
   password: true,

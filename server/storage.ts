@@ -1,10 +1,10 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   users, userEngineState, animeSearched, vibeProfiles,
   userRatings, animeDiscovery, userProfiles,
-  userBanList, userWatchState, userPreferences,
+  userBanList, userWatchState, userPreferences, userChatUsage,
   type InsertUser, type User,
 } from "@shared/schema";
 
@@ -72,6 +72,9 @@ export interface IStorage {
 
   setHiddenGemBias(userId: string, bias: number): Promise<void>;
   getHiddenGemBias(userId: string): Promise<number>;
+
+  incrementChatCount(userId: string, date: string): Promise<number>;
+  getChatCount(userId: string, date: string): Promise<number>;
 }
 
 class PostgresStorage implements IStorage {
@@ -409,6 +412,30 @@ class PostgresStorage implements IStorage {
         .from(userPreferences)
         .where(eq(userPreferences.userId, userId))
         .then((rows) => rows[0]?.hiddenGemBias ?? 0.5)
+    );
+  }
+
+  async incrementChatCount(userId: string, date: string): Promise<number> {
+    return this.withRetry(() =>
+      db
+        .insert(userChatUsage)
+        .values({ userId, date, messageCount: 1 })
+        .onConflictDoUpdate({
+          target: [userChatUsage.userId, userChatUsage.date],
+          set: { messageCount: sql`${userChatUsage.messageCount} + 1` },
+        })
+        .returning({ messageCount: userChatUsage.messageCount })
+        .then((rows) => rows[0]?.messageCount ?? 1)
+    );
+  }
+
+  async getChatCount(userId: string, date: string): Promise<number> {
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(userChatUsage)
+        .where(and(eq(userChatUsage.userId, userId), eq(userChatUsage.date, date)))
+        .then((rows) => rows[0]?.messageCount ?? 0)
     );
   }
 }

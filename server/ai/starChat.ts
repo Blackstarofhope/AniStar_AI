@@ -264,6 +264,19 @@ export async function processChat(
   history: ChatMessage[],
   userId = "default"
 ): Promise<ChatResponse> {
+  // Daily message cap — checked before any other processing or Claude call.
+  const today = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+  const dayOfWeek = new Date().getDay(); // 0=Sunday … 5=Friday, 6=Saturday
+  const dailyCap = dayOfWeek === 5 || dayOfWeek === 6 ? 10 : 5;
+  const currentCount = await storage.getChatCount(userId, today);
+  if (currentCount >= dailyCap) {
+    return {
+      response: "You've reached your daily message limit. Star will be ready for you tomorrow.",
+      implicitFeedback: false,
+    };
+  }
+  await storage.incrementChatCount(userId, today);
+
   // Retry any discovery records that failed on a previous call.
   await flushPendingDiscoveries();
 

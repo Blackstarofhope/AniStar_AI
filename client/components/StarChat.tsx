@@ -53,6 +53,16 @@ async function postChat(
   return res.json();
 }
 
+async function fetchChatUsage(
+  userId: string
+): Promise<{ count: number; cap: number; remaining: number }> {
+  const url = new URL("/api/user/chat-usage", getApiUrl());
+  url.searchParams.set("userId", userId);
+  const res = await fetch(url.toString());
+  if (!res.ok) throw new Error("Usage unavailable");
+  return res.json();
+}
+
 function TypingDot({ delay }: { delay: number }) {
   const opacity = useSharedValue(0.25);
 
@@ -113,6 +123,12 @@ function UserBubble({ content }: { content: string }) {
 const STAR_WELCOME =
   "I'm Star — I exist to connect you with the stories that were made for you. What are you in the mood for?";
 
+interface ChatUsage {
+  count: number;
+  cap: number;
+  remaining: number;
+}
+
 export function StarChat({ initialMessage }: StarChatProps) {
   const tabBarHeight = useBottomTabBarHeight();
   const { userId } = useUser();
@@ -122,7 +138,18 @@ export function StarChat({ initialMessage }: StarChatProps) {
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [chatUsage, setChatUsage] = useState<ChatUsage | null>(null);
   const scrollRef = useRef<ScrollView>(null);
+
+  const refreshUsage = useCallback(() => {
+    fetchChatUsage(userId)
+      .then(setChatUsage)
+      .catch(() => {});
+  }, [userId]);
+
+  useEffect(() => {
+    refreshUsage();
+  }, [refreshUsage]);
 
   const scrollToBottom = useCallback(() => {
     setTimeout(() => {
@@ -130,9 +157,11 @@ export function StarChat({ initialMessage }: StarChatProps) {
     }, 50);
   }, []);
 
+  const isAtCap = chatUsage !== null && chatUsage.remaining <= 0;
+
   const sendMessage = useCallback(async () => {
     const text = input.trim();
-    if (!text || isLoading) return;
+    if (!text || isLoading || isAtCap) return;
     setInput("");
 
     const userMsg: Message = {
@@ -166,8 +195,9 @@ export function StarChat({ initialMessage }: StarChatProps) {
     } finally {
       setIsLoading(false);
       scrollToBottom();
+      refreshUsage();
     }
-  }, [input, isLoading, messages, scrollToBottom]);
+  }, [input, isLoading, isAtCap, messages, scrollToBottom, userId, refreshUsage]);
 
   return (
     <View style={styles.container}>
@@ -200,35 +230,55 @@ export function StarChat({ initialMessage }: StarChatProps) {
         {isLoading ? <TypingIndicator /> : null}
       </ScrollView>
 
-      <View
-        style={[
-          styles.inputRow,
-          Platform.OS === "ios" ? styles.inputRowIos : styles.inputRowAndroid,
-        ]}
-      >
-        <TextInput
-          value={input}
-          onChangeText={setInput}
-          placeholder="Tell Star what you're looking for..."
-          placeholderTextColor={Colors.dark.textSecondary}
-          style={styles.input}
-          returnKeyType="send"
-          onSubmitEditing={sendMessage}
-          editable={!isLoading}
-          multiline={false}
-        />
-        <Pressable
-          onPress={sendMessage}
-          disabled={!input.trim() || isLoading}
-          style={({ pressed }) => [
-            styles.sendButton,
-            (!input.trim() || isLoading) && styles.sendButtonDisabled,
-            pressed && { opacity: 0.75 },
+      <View style={styles.inputArea}>
+        {chatUsage !== null ? (
+          <View style={styles.usageBar}>
+            {isAtCap ? (
+              <ThemedText style={styles.usageCapped}>
+                Daily limit reached — Star returns tomorrow
+              </ThemedText>
+            ) : (
+              <ThemedText style={styles.usageCount}>
+                {chatUsage.count}/{chatUsage.cap} messages today
+              </ThemedText>
+            )}
+          </View>
+        ) : null}
+
+        <View
+          style={[
+            styles.inputRow,
+            Platform.OS === "ios" ? styles.inputRowIos : styles.inputRowAndroid,
           ]}
-          hitSlop={8}
         >
-          <Ionicons name="arrow-up" size={18} color="#fff" />
-        </Pressable>
+          <TextInput
+            value={input}
+            onChangeText={setInput}
+            placeholder={
+              isAtCap
+                ? "Daily limit reached — come back tomorrow"
+                : "Tell Star what you're looking for..."
+            }
+            placeholderTextColor={Colors.dark.textSecondary}
+            style={[styles.input, isAtCap && styles.inputDisabled]}
+            returnKeyType="send"
+            onSubmitEditing={sendMessage}
+            editable={!isLoading && !isAtCap}
+            multiline={false}
+          />
+          <Pressable
+            onPress={sendMessage}
+            disabled={!input.trim() || isLoading || isAtCap}
+            style={({ pressed }) => [
+              styles.sendButton,
+              (!input.trim() || isLoading || isAtCap) && styles.sendButtonDisabled,
+              pressed && { opacity: 0.75 },
+            ]}
+            hitSlop={8}
+          >
+            <Ionicons name="arrow-up" size={18} color="#fff" />
+          </Pressable>
+        </View>
       </View>
     </View>
   );
@@ -367,14 +417,30 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.lg,
   },
+  inputArea: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.dark.glassBorder,
+    backgroundColor: Colors.dark.backgroundDefault,
+  },
+  usageBar: {
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.sm,
+  },
+  usageCount: {
+    fontSize: 11,
+    color: Colors.dark.textSecondary,
+    textAlign: "right",
+  },
+  usageCapped: {
+    fontSize: 11,
+    color: "#FF007F",
+    textAlign: "right",
+  },
   inputRow: {
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: Colors.dark.glassBorder,
-    backgroundColor: Colors.dark.backgroundDefault,
     gap: Spacing.sm,
   },
   inputRowIos: {
@@ -405,5 +471,8 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     opacity: 0.35,
+  },
+  inputDisabled: {
+    opacity: 0.5,
   },
 });
