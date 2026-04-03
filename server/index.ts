@@ -221,6 +221,10 @@ function setupErrorHandler(app: express.Application) {
   setupBodyParsing(app);
   setupRequestLogging(app);
 
+  app.get("/privacy", (_req: Request, res: Response) => {
+    res.sendFile(path.resolve(process.cwd(), "privacy-policy.html"));
+  });
+
   configureExpoAndLanding(app);
 
   const server = await registerRoutes(app);

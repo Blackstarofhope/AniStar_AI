@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AniStar Privacy Policy</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #0F0F12;
+      color: #e2e2e9;
+      line-height: 1.7;
+      padding: 2rem 1rem 4rem;
+    }
+
+    .container {
+      max-width: 760px;
+      margin: 0 auto;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 3rem;
+      padding-bottom: 2rem;
+      border-bottom: 1px solid rgba(168, 85, 247, 0.3);
+    }
+
+    header h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, #A855F7, #00E5FF);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 0.4rem;
+    }
+
+    header p {
+      color: #888;
+      font-size: 0.9rem;
+    }
+
+    h2 {
+      font-size: 1.15rem;
+      font-weight: 600;
+      color: #A855F7;
+      margin: 2.2rem 0 0.75rem;
+    }
+
+    p {
+      margin-bottom: 0.9rem;
+      color: #c8c8d4;
+    }
+
+    ul {
+      list-style: none;
+      margin: 0.5rem 0 1rem;
+      padding: 0;
+    }
+
+    ul li {
+      padding: 0.4rem 0 0.4rem 1.4rem;
+      position: relative;
+      color: #c8c8d4;
+    }
+
+    ul li::before {
+      content: "›";
+      position: absolute;
+      left: 0;
+      color: #A855F7;
+      font-weight: bold;
+    }
+
+    ul li strong {
+      color: #e2e2e9;
+    }
+
+    a {
+      color: #00E5FF;
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    footer {
+      margin-top: 3.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid rgba(168, 85, 247, 0.2);
+      text-align: center;
+      color: #555;
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>AniStar Privacy Policy</h1>
+      <p>Effective Date: April 3, 2026</p>
+    </header>
+
+    <p>AniStar is an anime recommendation app built by Takeiazeki-AI. This policy explains what data we collect, how we use it, and your rights regarding that data. We believe in transparency and keeping things simple.</p>
+
+    <h2>What We Collect</h2>
+    <p>When you use AniStar, we collect and store the following:</p>
+    <ul>
+      <li><strong>Display name and PIN</strong> — Used to identify your account and allow sign-in across devices. Your PIN is stored on our server; we recommend not reusing PINs from other services.</li>
+      <li><strong>Anime ratings and preferences</strong> — When you rate anime (thumbs up/down, favorites), we store those ratings to personalize your recommendations.</li>
+      <li><strong>Ban list and watch state</strong> — Genres or anime you've banned and your watched/dropped/planned list, used to filter recommendations.</li>
+      <li><strong>Preference settings</strong> — Your hidden gem slider position and other preference controls.</li>
+      <li><strong>Chat messages</strong> — Messages you send to Star (our anime guide) are processed to generate responses and improve recommendations. Chat messages are sent to third-party AI services for processing (see below).</li>
+      <li><strong>Discovery attribution</strong> — When you introduce an anime to our system that wasn't previously tracked, your display name is recorded as the discoverer and shown to other users.</li>
+      <li><strong>Device identifier</strong> — A randomly generated ID stored locally on your device to associate your session with your account.</li>
+    </ul>
+
+    <h2>What We Don't Collect</h2>
+    <ul>
+      <li>We do not collect your real name, email address, phone number, or physical location.</li>
+      <li>We do not collect payment information (the app is free).</li>
+      <li>We do not track your activity outside of AniStar.</li>
+      <li>We do not use advertising trackers or sell data to advertisers.</li>
+    </ul>
+
+    <h2>How We Use Your Data</h2>
+    <p>Your data is used exclusively to provide and improve the AniStar experience:</p>
+    <ul>
+      <li><strong>Personalization</strong> — Your ratings, preferences, and ban list train a per-user recommendation model that learns your taste over time.</li>
+      <li><strong>Chat responses</strong> — Your messages to Star are sent to Anthropic's Claude API to generate conversational responses. These messages are processed according to Anthropic's data usage policies.</li>
+      <li><strong>Anime enrichment</strong> — Anime metadata may be sent to AI services to generate vibe profiles (atmosphere, tone, character descriptions) that improve recommendation quality.</li>
+      <li><strong>Community features</strong> — Your display name is visible to other users when you discover a new anime for the community.</li>
+    </ul>
+
+    <h2>Third-Party Services</h2>
+    <p>AniStar uses the following third-party services to function:</p>
+    <ul>
+      <li><strong>Anthropic (Claude API)</strong> — Processes chat messages and generates AI responses. Subject to Anthropic's Privacy Policy.</li>
+      <li><strong>Jikan API / MyAnimeList</strong> — Provides anime metadata (titles, genres, scores, images). No user data is sent to these services.</li>
+      <li><strong>AniList API</strong> — Provides supplementary anime metadata. No user data is sent to this service.</li>
+      <li><strong>Replit</strong> — Hosts the application and database. Subject to Replit's Privacy Policy.</li>
+    </ul>
+
+    <h2>Data Storage and Security</h2>
+    <p>Your data is stored in a PostgreSQL database hosted on Replit's infrastructure. We use connection encryption and access controls to protect your data. However, no system is perfectly secure, and we cannot guarantee absolute security. Your PIN is stored in our database — please choose a PIN you don't use elsewhere.</p>
+
+    <h2>Data Retention</h2>
+    <p>We retain your data for as long as your account exists. If you wish to delete your account and all associated data, contact us at the email below. We will delete your data within 30 days of a verified request.</p>
+
+    <h2>Children's Privacy</h2>
+    <p>AniStar is not directed at children under 13. We do not knowingly collect personal information from children under 13. If you believe a child under 13 has provided us with personal data, please contact us and we will delete it.</p>
+
+    <h2>Your Rights</h2>
+    <p>You have the right to:</p>
+    <ul>
+      <li>Request a copy of all data we hold about you.</li>
+      <li>Request deletion of your account and all associated data.</li>
+      <li>Modify your display name, preferences, ban list, and ratings at any time within the app.</li>
+      <li>Stop using the service at any time — uninstalling the app removes all locally stored data (your device ID). Server-side data will be deleted upon request.</li>
+    </ul>
+
+    <h2>Changes to This Policy</h2>
+    <p>We may update this privacy policy from time to time. Changes will be reflected by updating the effective date at the top of this page. Continued use of AniStar after changes constitutes acceptance of the updated policy.</p>
+
+    <h2>Contact</h2>
+    <p>For privacy-related questions, data requests, or account deletion, contact:</p>
+    <ul>
+      <li><strong>Takeiazeki-AI</strong></li>
+      <li>Email: <a href="mailto:Blackstarofhope8@gmail.com">Blackstarofhope8@gmail.com</a></li>
+    </ul>
+
+    <footer>
+      &copy; 2026 Takeiazeki-AI. All rights reserved. AniStar
+    </footer>
+  </div>
+</body>
+</html>
