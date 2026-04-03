@@ -2,7 +2,7 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
 import { storage, testConnection } from "./storage.js";
 import {
-  getRecommendations, processFeedback, getAIStatus, verifyAnimeArtwork,
+  getRecommendations, getThreeLaneRecommendations, processFeedback, getAIStatus, verifyAnimeArtwork,
   restTrain, hasRestTrained
 } from "./ai/recommendEngine.js";
 import { getSchedule, getSeasonalAnime, getAnimeDetails, getAllCurrentAnime, initAnimeData, getSearchedCacheEntries } from "./ai/animeData.js";
@@ -144,6 +144,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ data });
     } catch (e) {
       res.status(500).json({ error: "Failed to fetch anime details" });
+    }
+  });
+
+  app.get("/api/ai/recommend/lanes", async (req: Request, res: Response) => {
+    const userId = extractUserId(req);
+    try {
+      const lanes = await getThreeLaneRecommendations(userId, 15000);
+      res.json(lanes);
+    } catch (e) {
+      console.error("[AI] Three-lane recommendation error:", e);
+      res.status(500).json({ error: "Failed to generate lane recommendations" });
     }
   });
 

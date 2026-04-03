@@ -45,6 +45,14 @@ export interface Recommendation {
   broadcast?: { day?: string; time?: string };
   vibe?: { atmosphere: string; tone: string; protagonistArchetype: string };
   discoveredBy?: { userId: string; displayName: string };
+  lane?: string;
+  reason?: string;
+}
+
+export interface ThreeLaneRecommendations {
+  safe: Recommendation[];
+  stretch: Recommendation[];
+  blind: Recommendation[];
 }
 
 export interface AIStatus {
@@ -308,8 +316,8 @@ async function scoreAnimeList(
   userPref: number[],
   limit: number,
   hiddenGemBias: number
-): Promise<{ anime: AnimeScheduleItem; score: number; embedding: number[] }[]> {
-  const scored: { anime: AnimeScheduleItem; score: number; embedding: number[] }[] = [];
+): Promise<{ anime: AnimeScheduleItem; score: number; embedding: number[]; cosSim: number; ffScore: number }[]> {
+  const scored: { anime: AnimeScheduleItem; score: number; embedding: number[]; cosSim: number; ffScore: number }[] = [];
 
   const embeddingCache = new Map<number, number[]>(
     eng.allAnimeEmbeddings.map((e) => [e.animeId, e.embedding])
@@ -336,7 +344,7 @@ async function scoreAnimeList(
         const popularityFactor = anime.score ? (anime.score / 10) : 0.5;
         const biasAdjustment = (hiddenGemBias - 0.5) * 0.4;
         const adjustedScore = combinedScore - (biasAdjustment * popularityFactor) + (biasAdjustment * (1 - popularityFactor));
-        scored.push({ anime, score: adjustedScore, embedding });
+        scored.push({ anime, score: adjustedScore, embedding, cosSim, ffScore });
       } catch {
         return;
       }
@@ -462,6 +470,159 @@ export async function getRecommendations(userId: string, limit = 10, deadlineMs 
     }),
     timeoutGuard,
   ]);
+}
+
+export async function getThreeLaneRecommendations(
+  userId: string,
+  deadlineMs = 15000
+): Promise<ThreeLaneRecommendations> {
+  const eng = await getEngine(userId);
+  const deadline = Date.now() + deadlineMs;
+
+  const [rawAnimeList, bans, seenIds, hiddenGemBias] = await Promise.all([
+    getAllCurrentAnime(),
+    storage.getUserBans(userId),
+    storage.getWatchedMalIds(userId),
+    storage.getHiddenGemBias(userId),
+  ]);
+
+  const bannedMalIds = new Set<number>(
+    bans.filter((b) => b.malId !== null).map((b) => b.malId!)
+  );
+  const bannedGenreSet = new Set<string>(
+    bans.filter((b) => b.bannedGenre !== null).map((b) => b.bannedGenre!)
+  );
+
+  const animeList = rawAnimeList.filter((anime) => {
+    if (bannedMalIds.has(anime.mal_id)) return false;
+    if (seenIds.has(anime.mal_id)) return false;
+    const genres = (anime.genres ?? []).map((g) => g.name);
+    if (genres.length > 0 && genres.every((g) => bannedGenreSet.has(g))) return false;
+    return true;
+  });
+
+  if (animeList.length === 0) return { safe: [], stretch: [], blind: [] };
+
+  const userPref = buildUserPreferenceVector(
+    eng.ratings.map((r) => ({ embedding: r.embedding, rating: r.rating }))
+  );
+
+  // Build liked genre set from historical positive ratings
+  const animeGenreMap = new Map<number, string[]>();
+  for (const a of rawAnimeList) {
+    animeGenreMap.set(a.mal_id, (a.genres ?? []).map((g) => g.name));
+  }
+  const likedGenreSet = new Set<string>();
+  for (const r of eng.ratings) {
+    if (r.rating > 0.5) {
+      const genres = animeGenreMap.get(r.animeId);
+      if (genres) for (const g of genres) likedGenreSet.add(g);
+    }
+  }
+
+  const scored = await scoreAnimeList(eng, animeList, userPref, 50, hiddenGemBias);
+
+  // Classify into lanes — check BLIND first (broadest exclusion), then SAFE, then STRETCH
+  type ScoredItem = typeof scored[0];
+  const safePool: ScoredItem[] = [];
+  const stretchPool: ScoredItem[] = [];
+  const blindPool: ScoredItem[] = [];
+
+  for (const item of scored) {
+    const genres = (item.anime.genres ?? []).map((g) => g.name);
+    const genreNovelty = genres.filter((g) => !likedGenreSet.has(g)).length;
+    if (item.cosSim < 0.3 || genreNovelty >= 2) {
+      blindPool.push(item);
+    } else if (item.cosSim > 0.6 && genreNovelty === 0) {
+      safePool.push(item);
+    } else {
+      stretchPool.push(item);
+    }
+  }
+
+  safePool.sort((a, b) => b.score - a.score);
+  stretchPool.sort((a, b) => b.score - a.score);
+  blindPool.sort((a, b) => b.ffScore - a.ffScore);
+
+  let safeItems = safePool.slice(0, 3);
+  let stretchItems = stretchPool.slice(0, 3);
+  let blindItems = blindPool.slice(0, 2);
+
+  // Fill empty lanes from the nearest overflow
+  if (safeItems.length === 0) safeItems = stretchPool.slice(3, 6);
+  if (stretchItems.length === 0) stretchItems = safePool.slice(3, 6);
+  if (blindItems.length === 0) blindItems = stretchPool.slice(3, 5);
+
+  // Verification with deadline
+  const allItems = [...safeItems, ...stretchItems, ...blindItems];
+  const verificationMap = new Map<number, { verified: boolean; score: number; visionEmbedding: number[] }>();
+  const verificationPromises = allItems.map(async ({ anime }) => {
+    try {
+      const v = await verifyArtwork(anime.mal_id, anime.images?.jpg?.large_image_url || "", anime.title);
+      verificationMap.set(anime.mal_id, { ...v, visionEmbedding: v.visionEmbedding ?? [] });
+      if (v.visionEmbedding && v.visionEmbedding.length > 0) {
+        alignVisionPhasesToEmbedding(eng.kuramoto, v.visionEmbedding);
+      }
+    } catch {
+      verificationMap.set(anime.mal_id, UNVERIFIED);
+    }
+  });
+
+  const verifyRemaining = deadline - Date.now();
+  if (verifyRemaining > 0) {
+    await Promise.race([
+      Promise.all(verificationPromises),
+      new Promise<void>((resolve) => setTimeout(resolve, verifyRemaining)),
+    ]);
+  }
+
+  stepKuramoto(eng.kuramoto, 3);
+  updateOrderHistory(eng.kuramoto);
+
+  function buildReason(item: ScoredItem, lane: string): string {
+    const genres = (item.anime.genres ?? []).map((g) => g.name);
+    const cachedVibe = getVibeProfileFromCache(item.anime.mal_id);
+    if (lane === "safe") {
+      const matchingGenres = genres.filter((g) => likedGenreSet.has(g));
+      const topGenres = matchingGenres.slice(0, 2).join(" & ");
+      return `Matches your taste in ${topGenres || "your favourite genres"}`;
+    }
+    if (lane === "stretch") {
+      const unfamiliar = genres.find((g) => !likedGenreSet.has(g)) ?? genres[0] ?? "new territory";
+      const vibeAttr = cachedVibe?.atmosphere ?? "vibe";
+      return `New territory — ${unfamiliar} — but the ${vibeAttr} aligns with what you love`;
+    }
+    const vibeAttr = cachedVibe?.atmosphere ?? "something unexpected";
+    return `This one's a gamble. The vibe says ${vibeAttr} — trust it or skip it`;
+  }
+
+  function toRecommendations(items: ScoredItem[], lane: string): Recommendation[] {
+    return items.map((item) => {
+      const verification = verificationMap.get(item.anime.mal_id) ?? UNVERIFIED;
+      const rec = buildRecommendationItem(item.anime, item.score, verification);
+      rec.lane = lane;
+      rec.reason = buildReason(item, lane);
+      return rec;
+    });
+  }
+
+  const safe = toRecommendations(safeItems, "safe");
+  const stretch = toRecommendations(stretchItems, "stretch");
+  const blind = toRecommendations(blindItems, "blind");
+
+  // Attach discovery attribution
+  const allRecs = [...safe, ...stretch, ...blind];
+  const discoveryResults = await Promise.allSettled(
+    allRecs.map((r) => storage.getDiscovery(r.mal_id))
+  );
+  for (let i = 0; i < allRecs.length; i++) {
+    const d = discoveryResults[i];
+    if (d.status === "fulfilled" && d.value) {
+      allRecs[i].discoveredBy = { userId: d.value.userId, displayName: d.value.displayName };
+    }
+  }
+
+  return { safe, stretch, blind };
 }
 
 export async function processFeedback(
