@@ -1,0 +1,37 @@
+Redesign the For You / Recommendations screen to display three-lane results.
+
+In client/screens/RecommendationsScreen.tsx:
+
+1. Change the data fetch to call /api/ai/recommend/lanes instead of /api/ai/recommend. Parse the response as { safe: Recommendation[], stretch: Recommendation[], blind: Recommendation[] }.
+
+2. Display the three lanes as horizontal sections stacked vertically:
+
+   Section 1 — "Safe Picks" with subtitle "Right in your wheelhouse"
+   - Horizontal scrollable row of anime cards
+   - Each card shows the anime image, title, score, and the "reason" field in small text below
+
+   Section 2 — "Stretch Picks" with subtitle "Familiar enough, different enough"
+   - Same horizontal scrollable row layout
+   - Cards have a subtle accent border or badge to visually distinguish them
+
+   Section 3 — "Blind Picks" with subtitle "Trust Star on this one"
+   - Same layout but cards have a more dramatic visual treatment — maybe a gradient overlay or a "?" badge
+   - The reason text should feel more mysterious/oracle-like
+
+3. Each card still has the thumbs up/down feedback buttons that call POST /api/ai/feedback.
+
+4. Add a pull-to-refresh that re-fetches all three lanes.
+
+5. At the top of the screen, add a "Hidden Gem" slider:
+   - A horizontal slider from "Mainstream" (left) to "Hidden Gems" (right)
+   - When the user adjusts it, call POST /api/user/preferences with the new hiddenGemBias value (0.0 = mainstream, 1.0 = hidden gems)
+   - After adjusting, automatically refresh recommendations
+   - Fetch initial slider position from GET /api/user/preferences on mount
+
+6. Below the slider, add a small "Manage ban list" link that opens a modal showing their current bans with delete buttons, and an "Add ban" section where they can type a genre name or anime title to ban.
+   - Banning by genre: POST /api/user/ban with { bannedGenre: "Ecchi" }
+   - Banning by anime: POST /api/user/ban with { malId: 12345 }
+   - Removing: DELETE /api/user/ban/:id
+   - After any change, refresh recommendations
+
+Do not modify any AI engine files.
