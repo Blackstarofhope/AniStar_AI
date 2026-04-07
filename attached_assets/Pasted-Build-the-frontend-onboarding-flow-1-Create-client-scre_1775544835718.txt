@@ -1,0 +1,29 @@
+Build the frontend onboarding flow.
+
+1. Create client/screens/OnboardingScreen.tsx that:
+   - Is shown immediately after the user completes ProfileSetupScreen (i.e., after their displayName is saved)
+   - Displays Star's first oracle message — fetch it from the existing chat endpoint with an empty history so Star generates a personalized greeting based on the display name
+   - Below the greeting, shows three large tappable cards:
+     - Card 1: "Speak the names" — "Tell Star which anime have stayed with you and why. She'll feel out the patterns."
+     - Card 2: "The trial of choices" — "A short interactive ritual. Genres, characters, instincts. Star reads what you pick."
+     - Card 3: "Walk the library" — "Browse Star's collection. Favorite what calls to you. Star will recognize you when she sees enough."
+
+2. Tapping Card 1 navigates to a new screen Path1Screen.tsx:
+   - Large multi-line text input
+   - Placeholder: "List anime that have stayed with you. Tell me why each one mattered. Don't hold back."
+   - Submit button that calls POST /api/onboarding/path1 with { favorites: text }
+   - On success, navigate to a "Star is feeling out your taste..." waiting screen, then after 3 seconds navigate to the main app
+
+3. Tapping Card 3 calls POST /api/onboarding/path3/start and navigates the user directly to the Library tab (which should already exist). Show a tooltip or banner: "Favorite anime that resonate. Star will let you know when she sees you."
+
+4. Update App.tsx to gate the main app behind onboarding.unlockedRecommendations:
+   - Add a new state: hasCompletedOnboarding (fetched from GET /api/user/onboarding-state)
+   - If displayName exists but onboarding is not complete: show OnboardingScreen
+   - If onboarding is complete: show the main NavigationContainer
+   - Add GET /api/user/onboarding-state endpoint in server/routes.ts that returns the user's onboarding state from storage.getOnboardingState
+
+5. The For You / Recommendations tab should be hidden or show a locked state until onboarding.unlockedRecommendations === true. When locked, show: "Star is still learning who you are. Complete the trial or explore the library." with a button to return to onboarding.
+
+Card 2 (gameshow) navigation will be implemented in Prompt 6.
+
+Do not modify any AI engine files.

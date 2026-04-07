@@ -14,17 +14,22 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { FavoritesProvider } from "@/contexts/FavoritesContext";
 import { UserProvider, useUser } from "@/contexts/UserContext";
 import ProfileSetupScreen from "@/screens/ProfileSetupScreen";
+import OnboardingScreen from "@/screens/OnboardingScreen";
 import { Colors } from "@/constants/theme";
 
 function AppContent() {
-  const { displayName, isLoading } = useUser();
+  const { displayName, isLoading, onboardingPath, isCheckingOnboarding } = useUser();
 
-  if (isLoading) {
+  if (isLoading || isCheckingOnboarding) {
     return <View style={styles.root} />;
   }
 
   if (displayName === null) {
     return <ProfileSetupScreen />;
+  }
+
+  if (onboardingPath === null) {
+    return <OnboardingScreen />;
   }
 
   return (

@@ -6,6 +6,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useScreenOptions } from "@/hooks/useScreenOptions";
 import { HeaderTitle } from "@/components/HeaderTitle";
 import { Colors } from "@/constants/theme";
+import { useUser } from "@/contexts/UserContext";
 import HomeScreen from "@/screens/HomeScreen";
 import AnimeDetailScreen from "@/screens/AnimeDetailScreen";
 import RecommendationsScreen from "@/screens/RecommendationsScreen";
@@ -86,8 +87,10 @@ function RecommendationsNavigator() {
 }
 
 export default function TabNavigator() {
+  const { preferredStartTab } = useUser();
   return (
     <Tab.Navigator
+      initialRouteName={preferredStartTab}
       screenOptions={({ route }) => ({
         headerShown: false,
         tabBarStyle: {

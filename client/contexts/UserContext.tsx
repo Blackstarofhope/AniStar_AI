@@ -14,26 +14,60 @@ function generateUUID(): string {
   });
 }
 
+interface OnboardingState {
+  pathChosen: string | null;
+  completed: boolean;
+  unlockedRecommendations: boolean;
+}
+
 interface UserContextValue {
   userId: string;
   displayName: string | null;
   isLoading: boolean;
+  onboardingPath: string | null;
+  onboardingUnlocked: boolean;
+  isCheckingOnboarding: boolean;
+  preferredStartTab: string;
   saveDisplayName: (name: string, pin: string) => Promise<void>;
   login: (displayName: string, pin: string) => Promise<boolean>;
+  setOnboardingPath: (path: string) => void;
+  markOnboardingUnlocked: () => void;
+  setPreferredStartTab: (tab: string) => void;
+  refreshOnboardingState: () => Promise<void>;
 }
 
 const UserContext = createContext<UserContextValue>({
   userId: "default",
   displayName: null,
   isLoading: true,
+  onboardingPath: null,
+  onboardingUnlocked: false,
+  isCheckingOnboarding: false,
+  preferredStartTab: "Schedule",
   saveDisplayName: async () => {},
   login: async () => false,
+  setOnboardingPath: () => {},
+  markOnboardingUnlocked: () => {},
+  setPreferredStartTab: () => {},
+  refreshOnboardingState: async () => {},
 });
+
+async function fetchOnboardingStateFromServer(userId: string, baseUrl: string): Promise<OnboardingState> {
+  const url = new URL(`/api/user/onboarding-state?userId=${encodeURIComponent(userId)}`, baseUrl);
+  const res = await fetch(url.toString());
+  if (!res.ok) throw new Error("Failed to fetch onboarding state");
+  return res.json() as Promise<OnboardingState>;
+}
 
 export function UserProvider({ children }: { children: React.ReactNode }) {
   const [userId, setUserId] = useState("default");
   const [displayName, setDisplayName] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  const [onboardingPath, setOnboardingPathState] = useState<string | null>(null);
+  const [onboardingUnlocked, setOnboardingUnlocked] = useState(false);
+  const [isCheckingOnboarding, setIsCheckingOnboarding] = useState(false);
+  const [preferredStartTab, setPreferredStartTabState] = useState("Schedule");
 
   useEffect(() => {
     async function init() {
@@ -48,6 +82,19 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
 
         const storedName = await AsyncStorage.getItem(DISPLAY_NAME_KEY);
         setDisplayName(storedName ?? null);
+
+        if (storedName) {
+          setIsCheckingOnboarding(true);
+          try {
+            const baseUrl = getApiUrl();
+            const state = await fetchOnboardingStateFromServer(storedId, baseUrl);
+            setOnboardingPathState(state.pathChosen ?? null);
+            setOnboardingUnlocked(state.unlockedRecommendations ?? false);
+          } catch {
+          } finally {
+            setIsCheckingOnboarding(false);
+          }
+        }
       } catch {
         const fallbackId = generateUUID();
         setUserId(fallbackId);
@@ -71,6 +118,8 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     if (!res.ok) throw new Error("Failed to save display name");
     await AsyncStorage.setItem(DISPLAY_NAME_KEY, trimmed);
     setDisplayName(trimmed);
+    setOnboardingPathState(null);
+    setOnboardingUnlocked(false);
   }, [userId]);
 
   const login = useCallback(async (name: string, pin: string): Promise<boolean> => {
@@ -87,11 +136,60 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     setUserId(returnedId);
     setCurrentUserId(returnedId);
     setDisplayName(name.trim());
+
+    try {
+      const baseUrl = getApiUrl();
+      const state = await fetchOnboardingStateFromServer(returnedId, baseUrl);
+      setOnboardingPathState(state.pathChosen ?? null);
+      setOnboardingUnlocked(state.unlockedRecommendations ?? false);
+    } catch {
+      setOnboardingPathState(null);
+      setOnboardingUnlocked(false);
+    }
+
     return true;
   }, []);
 
+  const setOnboardingPath = useCallback((path: string) => {
+    setOnboardingPathState(path);
+  }, []);
+
+  const markOnboardingUnlocked = useCallback(() => {
+    setOnboardingUnlocked(true);
+  }, []);
+
+  const setPreferredStartTab = useCallback((tab: string) => {
+    setPreferredStartTabState(tab);
+  }, []);
+
+  const refreshOnboardingState = useCallback(async () => {
+    if (!userId || userId === "default") return;
+    try {
+      const baseUrl = getApiUrl();
+      const state = await fetchOnboardingStateFromServer(userId, baseUrl);
+      setOnboardingPathState(state.pathChosen ?? null);
+      setOnboardingUnlocked(state.unlockedRecommendations ?? false);
+    } catch {}
+  }, [userId]);
+
   return (
-    <UserContext.Provider value={{ userId, displayName, isLoading, saveDisplayName, login }}>
+    <UserContext.Provider
+      value={{
+        userId,
+        displayName,
+        isLoading,
+        onboardingPath,
+        onboardingUnlocked,
+        isCheckingOnboarding,
+        preferredStartTab,
+        saveDisplayName,
+        login,
+        setOnboardingPath,
+        markOnboardingUnlocked,
+        setPreferredStartTab,
+        refreshOnboardingState,
+      }}
+    >
       {children}
     </UserContext.Provider>
   );

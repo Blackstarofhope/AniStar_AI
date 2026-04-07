@@ -63,17 +63,26 @@ function LibraryCard({
   cardWidth,
   userId,
   onPress,
+  onUnlocked,
 }: {
   anime: LibraryAnime;
   cardWidth: number;
   userId: string;
   onPress: () => void;
+  onUnlocked?: () => void;
 }) {
   const [rated, setRated] = useState<"like" | "dislike" | null>(null);
 
   const feedbackMutation = useMutation({
     mutationFn: ({ rating }: { rating: number }) =>
       apiRequest("POST", "/api/ai/feedback", { malId: anime.mal_id, rating, userId }),
+    onSuccess: async (res) => {
+      if (!onUnlocked) return;
+      try {
+        const data = (await res.json()) as { justUnlocked?: boolean };
+        if (data.justUnlocked) onUnlocked();
+      } catch {}
+    },
   });
 
   const handleFeedback = useCallback(
@@ -294,7 +303,7 @@ function DetailModal({
 }
 
 export default function LibraryScreen() {
-  const { userId } = useUser();
+  const { userId, onboardingPath, onboardingUnlocked, markOnboardingUnlocked } = useUser();
   const headerHeight = useHeaderHeight();
   const tabBarHeight = useBottomTabBarHeight();
   const { width } = useWindowDimensions();
@@ -363,9 +372,10 @@ export default function LibraryScreen() {
         cardWidth={cardWidth}
         userId={userId}
         onPress={() => openDetail(item)}
+        onUnlocked={markOnboardingUnlocked}
       />
     ),
-    [cardWidth, userId, openDetail],
+    [cardWidth, userId, openDetail, markOnboardingUnlocked],
   );
 
   const keyExtractor = useCallback(
@@ -376,6 +386,14 @@ export default function LibraryScreen() {
   const renderListHeader = useCallback(
     () => (
       <View style={styles.controls}>
+        {onboardingPath === "manual" && !onboardingUnlocked ? (
+          <View style={styles.manualBanner}>
+            <Ionicons name="star-outline" size={14} color={Colors.dark.accentSecondary} />
+            <ThemedText style={styles.manualBannerText}>
+              Favorite anime that resonate. Star will let you know when she sees you.
+            </ThemedText>
+          </View>
+        ) : null}
         <View style={styles.sourceToggle}>
           {(["all", "airing", "discovered"] as Source[]).map((s) => (
             <Pressable
@@ -443,7 +461,7 @@ export default function LibraryScreen() {
         <ThemedText style={styles.countText}>{filtered.length} anime</ThemedText>
       </View>
     ),
-    [source, search, availableGenres, selectedGenres, filtered.length, toggleGenre],
+    [source, search, availableGenres, selectedGenres, filtered.length, toggleGenre, onboardingPath, onboardingUnlocked],
   );
 
   const ListEmpty = useMemo(
@@ -501,6 +519,22 @@ const styles = StyleSheet.create({
   controls: {
     gap: Spacing.sm,
     marginBottom: Spacing.sm,
+  },
+  manualBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    backgroundColor: "rgba(0, 229, 255, 0.07)",
+    borderWidth: 1,
+    borderColor: "rgba(0, 229, 255, 0.2)",
+    borderRadius: BorderRadius.xs,
+    padding: Spacing.sm,
+  },
+  manualBannerText: {
+    flex: 1,
+    fontSize: 12,
+    color: Colors.dark.accentSecondary,
+    lineHeight: 17,
   },
   sourceToggle: {
     flexDirection: "row",

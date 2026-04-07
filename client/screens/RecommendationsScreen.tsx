@@ -537,7 +537,7 @@ export default function RecommendationsScreen() {
   const navigation = useNavigation<NavProp>();
   const headerHeight = useHeaderHeight();
   const queryClient = useQueryClient();
-  const { userId } = useUser();
+  const { userId, onboardingUnlocked } = useUser();
 
   const [statusVisible, setStatusVisible] = useState(false);
   const [banModalVisible, setBanModalVisible] = useState(false);
@@ -606,6 +606,34 @@ export default function RecommendationsScreen() {
     ...(lanes?.stretch || []),
     ...(lanes?.blind || []),
   ];
+
+  if (!onboardingUnlocked) {
+    return (
+      <View style={[styles.root, { paddingTop: headerHeight, justifyContent: "center", alignItems: "center", paddingHorizontal: 32 }]}>
+        <Ionicons name="lock-closed-outline" size={48} color={Colors.dark.accent} style={{ marginBottom: 20 }} />
+        <ThemedText style={{ fontSize: 20, fontWeight: "700", color: Colors.dark.text, textAlign: "center", marginBottom: 12 }}>
+          Star is still learning who you are.
+        </ThemedText>
+        <ThemedText style={{ fontSize: 14, color: Colors.dark.textSecondary, textAlign: "center", lineHeight: 22, marginBottom: 32 }}>
+          Complete the trial or explore the library. Star will unlock your recommendations when she sees you clearly.
+        </ThemedText>
+        <Pressable
+          onPress={() => navigation.getParent()?.navigate("LibraryTab")}
+          style={({ pressed }) => ({
+            backgroundColor: Colors.dark.accent,
+            borderRadius: 14,
+            paddingVertical: 13,
+            paddingHorizontal: 28,
+            opacity: pressed ? 0.8 : 1,
+          })}
+        >
+          <ThemedText style={{ fontSize: 15, fontWeight: "700", color: "#fff" }}>
+            Explore the Library
+          </ThemedText>
+        </Pressable>
+      </View>
+    );
+  }
 
   return (
     <KeyboardAvoidingView

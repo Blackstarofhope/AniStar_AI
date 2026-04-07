@@ -557,6 +557,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/user/onboarding-state", async (req: Request, res: Response) => {
+    const userId = extractUserId(req);
+    try {
+      const state = await storage.getOnboardingState(userId);
+      res.json(
+        state ?? { pathChosen: null, completed: false, unlockedRecommendations: false }
+      );
+    } catch (e) {
+      console.error("[User] getOnboardingState error:", e);
+      res.status(500).json({ error: "Failed to fetch onboarding state" });
+    }
+  });
+
   // ---------------------------------------------------------------------------
   // Onboarding endpoints
   // ---------------------------------------------------------------------------
