@@ -79,6 +79,8 @@ async function claudeJsonCall(
 }
 
 async function processPath1Favorites(userId: string, favoritesText: string): Promise<void> {
+  console.log(`[Path1] Starting async processing for user=${userId} (input: ${favoritesText.length} chars)`);
+
   let entries: { title: string; reason: string | null }[] = [];
   try {
     const text = await claudeJsonCall(
@@ -88,35 +90,55 @@ async function processPath1Favorites(userId: string, favoritesText: string): Pro
     );
     const result = JSON.parse(text);
     if (Array.isArray(result)) entries = result as { title: string; reason: string | null }[];
+    console.log(`[Path1] Claude parsed ${entries.length} titles: ${entries.map((e) => e.title).join(", ")}`);
   } catch (e) {
     console.error("[Path1] Claude parse failed:", e instanceof Error ? e.message : e);
   }
 
+  if (entries.length === 0) {
+    console.warn(`[Path1] No titles parsed for user=${userId} — skipping training, still completing onboarding`);
+  }
+
+  let fetchedCount = 0;
+  let embeddedCount = 0;
+  let trainedCount = 0;
+
   for (const entry of entries) {
     if (!entry.title || typeof entry.title !== "string") continue;
+    console.log(`[Path1] Searching Jikan for "${entry.title}"…`);
     try {
       const results = await searchAndAddAnime(entry.title);
       const anime = results[0];
-      if (!anime) continue;
+      if (!anime) {
+        console.warn(`[Path1] Jikan returned no results for "${entry.title}" — skipping`);
+        continue;
+      }
+      fetchedCount++;
+      console.log(`[Path1] Fetched ${fetchedCount}: "${anime.title}" (mal_id=${anime.mal_id})`);
 
       const embedding = await embedAnimeWithVibeFallback(anime as unknown as AnimeInfo);
       await addAnimeEmbeddings(userId, [{ animeId: anime.mal_id, embedding }]);
+      embeddedCount++;
+      console.log(`[Path1] Embedded ${embeddedCount}: "${anime.title}"`);
+
       await processFeedback(anime.mal_id, 0.85, userId);
+      trainedCount++;
+      console.log(`[Path1] Trained ${trainedCount}: "${anime.title}" score=0.85`);
 
       if (entry.reason && typeof entry.reason === "string" && entry.reason.trim()) {
         await storage.saveAnimeReason(userId, anime.mal_id, entry.reason.trim()).catch(() => {});
       }
-
-      console.log(`[Path1] Processed "${anime.title}" (mal_id=${anime.mal_id}) for user=${userId}`);
     } catch (e) {
       console.error(`[Path1] Failed to process "${entry.title}":`, e instanceof Error ? e.message : e);
     }
   }
 
+  console.log(`[Path1] Processing complete: fetched=${fetchedCount}, embedded=${embeddedCount}, trained=${trainedCount} for user=${userId}`);
+
   try {
     await storage.unlockRecommendations(userId);
     await storage.completeOnboarding(userId);
-    console.log(`[Path1] Onboarding complete for user=${userId}`);
+    console.log(`[Path1] Onboarding complete — recommendations unlocked for user=${userId}`);
   } catch (e) {
     console.error("[Path1] Failed to complete onboarding:", e instanceof Error ? e.message : e);
   }
@@ -252,6 +274,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/ai/recommend/lanes", async (req: Request, res: Response) => {
     const userId = extractUserId(req);
     try {
+      const onboarding = await storage.getOnboardingState(userId);
+      if (!onboarding?.unlockedRecommendations) {
+        return res.status(403).json({ error: "Onboarding not complete" });
+      }
       const lanes = await getThreeLaneRecommendations(userId, 15000);
       res.json(lanes);
     } catch (e) {
@@ -264,6 +290,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const limit = Math.min(25, parseInt((req.query.limit as string) || "5", 10));
     const userId = extractUserId(req);
     try {
+      const onboarding = await storage.getOnboardingState(userId);
+      if (!onboarding?.unlockedRecommendations) {
+        return res.status(403).json({ error: "Onboarding not complete" });
+      }
       const recommendations = await getRecommendations(userId, limit, 12000);
       res.json({ recommendations });
     } catch (e) {
@@ -691,6 +721,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     const pool = loadCharacterPool();
     const characterById = new Map(pool.map((c) => [c.id, c]));
+
+    console.log(`[Path2/rankings] Processing ${rankings.length} rankings for user=${userId}`);
 
     // Process every ranking — save rating and train the engine
     for (const { characterId, rating } of rankings) {

@@ -86,6 +86,7 @@ export interface IStorage {
   getCharacterRatings(userId: string): Promise<{ characterId: string; rating: number }[]>;
 
   saveAnimeReason(userId: string, malId: number, reason: string): Promise<void>;
+  getAllUserProfiles(): Promise<{ userId: string; displayName: string }[]>;
 }
 
 class PostgresStorage implements IStorage {
@@ -301,6 +302,15 @@ class PostgresStorage implements IStorage {
           const match = rows.find((r) => r.pin === pin);
           return match?.userId ?? null;
         })
+    );
+  }
+
+  async getAllUserProfiles(): Promise<{ userId: string; displayName: string }[]> {
+    return this.withRetry(() =>
+      db
+        .select({ userId: userProfiles.userId, displayName: userProfiles.displayName })
+        .from(userProfiles)
+        .then((rows) => rows)
     );
   }
 

@@ -474,17 +474,22 @@ export async function processChat(
   let response = claudeResponse ?? generateStarResponse(signals, matches, noMatchFallbacks, historyLength);
 
   // Handle Star deciding to unlock recommendations for the manual path
-  if (isManualPath && response.includes("[UNLOCK_RECS]")) {
-    response = response.replace(/\[UNLOCK_RECS\]/g, "").trim();
-    setImmediate(async () => {
-      try {
-        await storage.unlockRecommendations(userId);
-        await storage.completeOnboarding(userId);
-        console.log(`[Path3] Star unlocked recommendations for user=${userId} via chat`);
-      } catch (e) {
-        console.error("[Path3] Failed to unlock via chat:", e instanceof Error ? e.message : e);
-      }
-    });
+  if (isManualPath) {
+    if (response.includes("[UNLOCK_RECS]")) {
+      console.log(`[Path3] [UNLOCK_RECS] token detected in Star's response — stripping token and unlocking user=${userId}`);
+      response = response.replace(/\[UNLOCK_RECS\]/g, "").trim();
+      setImmediate(async () => {
+        try {
+          await storage.unlockRecommendations(userId);
+          await storage.completeOnboarding(userId);
+          console.log(`[Path3] Recommendations unlocked for user=${userId} via Star chat`);
+        } catch (e) {
+          console.error("[Path3] Failed to unlock via chat:", e instanceof Error ? e.message : e);
+        }
+      });
+    } else {
+      console.log(`[Path3] Manual-path response for user=${userId}: [UNLOCK_RECS] token not present (not ready to unlock yet)`);
+    }
   }
 
   const implicitFeedback =

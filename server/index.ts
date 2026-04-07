@@ -1,6 +1,7 @@
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
+import { storage } from "./storage";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -216,6 +217,37 @@ function setupErrorHandler(app: express.Application) {
   });
 }
 
+async function backfillExistingUsers(): Promise<void> {
+  try {
+    const users = await storage.getAllUserProfiles();
+    if (!users || users.length === 0) {
+      log("[Backfill] No existing user profiles found — skipping.");
+      return;
+    }
+    let backfilledCount = 0;
+    for (const user of users) {
+      try {
+        const existing = await storage.getOnboardingState(user.userId);
+        if (!existing) {
+          await storage.unlockRecommendations(user.userId);
+          await storage.completeOnboarding(user.userId);
+          backfilledCount++;
+          log(`[Backfill] Unlocked existing user: ${user.userId} (${user.displayName})`);
+        }
+      } catch (e) {
+        log(`[Backfill] Failed to backfill user ${user.userId}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    if (backfilledCount > 0) {
+      log(`[Backfill] Done — unlocked ${backfilledCount} pre-existing user(s).`);
+    } else {
+      log("[Backfill] All existing users already have onboarding entries — nothing to backfill.");
+    }
+  } catch (e) {
+    log(`[Backfill] Error reading user profiles: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 (async () => {
   setupCors(app);
   setupBodyParsing(app);
@@ -242,4 +274,8 @@ function setupErrorHandler(app: express.Application) {
       log(`express server serving on port ${port}`);
     },
   );
+
+  // Backfill any existing user_profiles that don't yet have an onboarding row
+  // so users created before the onboarding system don't get locked out.
+  await backfillExistingUsers();
 })();

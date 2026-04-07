@@ -22,10 +22,41 @@ let cached: CharacterEntry[] | null = null;
 export function loadCharacterPool(): CharacterEntry[] {
   if (cached !== null) return cached;
   const poolPath = path.resolve(process.cwd(), "character-pool.json");
-  const raw = fs.readFileSync(poolPath, "utf-8");
-  const parsed = JSON.parse(raw) as CharacterPoolFile;
+
+  if (!fs.existsSync(poolPath)) {
+    const msg =
+      `[CharacterPool] FATAL: character-pool.json not found at ${poolPath}. ` +
+      `Make sure the file exists in the project root.`;
+    console.error(msg);
+    throw new Error(msg);
+  }
+
+  let raw: string;
+  try {
+    raw = fs.readFileSync(poolPath, "utf-8");
+  } catch (e) {
+    const msg = `[CharacterPool] Failed to read character-pool.json: ${e instanceof Error ? e.message : String(e)}`;
+    console.error(msg);
+    throw new Error(msg);
+  }
+
+  let parsed: CharacterPoolFile;
+  try {
+    parsed = JSON.parse(raw) as CharacterPoolFile;
+  } catch (e) {
+    const msg = `[CharacterPool] character-pool.json is not valid JSON: ${e instanceof Error ? e.message : String(e)}`;
+    console.error(msg);
+    throw new Error(msg);
+  }
+
+  if (!Array.isArray(parsed?.characters) || parsed.characters.length === 0) {
+    const msg = "[CharacterPool] character-pool.json has no characters array or it is empty.";
+    console.error(msg);
+    throw new Error(msg);
+  }
+
   cached = parsed.characters;
-  console.log(`[CharacterPool] Loaded ${cached.length} characters.`);
+  console.log(`[CharacterPool] Loaded ${cached.length} characters from ${poolPath}.`);
   return cached;
 }
 
