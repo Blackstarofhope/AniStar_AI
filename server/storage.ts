@@ -5,6 +5,7 @@ import {
   users, userEngineState, animeSearched, vibeProfiles,
   userRatings, animeDiscovery, userProfiles,
   userBanList, userWatchState, userPreferences, userChatUsage,
+  userOnboarding, userCharacterRatings,
   type InsertUser, type User,
 } from "@shared/schema";
 
@@ -75,6 +76,13 @@ export interface IStorage {
 
   incrementChatCount(userId: string, date: string): Promise<number>;
   getChatCount(userId: string, date: string): Promise<number>;
+
+  getOnboardingState(userId: string): Promise<{ pathChosen: string | null; completed: boolean; unlockedRecommendations: boolean } | null>;
+  setOnboardingPath(userId: string, path: string): Promise<void>;
+  completeOnboarding(userId: string): Promise<void>;
+  unlockRecommendations(userId: string): Promise<void>;
+  saveCharacterRating(userId: string, characterId: string, rating: number): Promise<void>;
+  getCharacterRatings(userId: string): Promise<{ characterId: string; rating: number }[]>;
 }
 
 class PostgresStorage implements IStorage {
@@ -436,6 +444,85 @@ class PostgresStorage implements IStorage {
         .from(userChatUsage)
         .where(and(eq(userChatUsage.userId, userId), eq(userChatUsage.date, date)))
         .then((rows) => rows[0]?.messageCount ?? 0)
+    );
+  }
+
+  async getOnboardingState(userId: string): Promise<{ pathChosen: string | null; completed: boolean; unlockedRecommendations: boolean } | null> {
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(userOnboarding)
+        .where(eq(userOnboarding.userId, userId))
+        .then((rows) => {
+          if (!rows[0]) return null;
+          return {
+            pathChosen: rows[0].pathChosen,
+            completed: rows[0].completed,
+            unlockedRecommendations: rows[0].unlockedRecommendations,
+          };
+        })
+    );
+  }
+
+  async setOnboardingPath(userId: string, path: string): Promise<void> {
+    return this.withRetry(() =>
+      db
+        .insert(userOnboarding)
+        .values({ userId, pathChosen: path })
+        .onConflictDoUpdate({
+          target: userOnboarding.userId,
+          set: { pathChosen: path },
+        })
+        .then(() => undefined)
+    );
+  }
+
+  async completeOnboarding(userId: string): Promise<void> {
+    return this.withRetry(() =>
+      db
+        .insert(userOnboarding)
+        .values({ userId, completed: true, unlockedRecommendations: true, completedAt: new Date() })
+        .onConflictDoUpdate({
+          target: userOnboarding.userId,
+          set: { completed: true, unlockedRecommendations: true, completedAt: new Date() },
+        })
+        .then(() => undefined)
+    );
+  }
+
+  async unlockRecommendations(userId: string): Promise<void> {
+    return this.withRetry(() =>
+      db
+        .insert(userOnboarding)
+        .values({ userId, unlockedRecommendations: true })
+        .onConflictDoUpdate({
+          target: userOnboarding.userId,
+          set: { unlockedRecommendations: true },
+        })
+        .then(() => undefined)
+    );
+  }
+
+  async saveCharacterRating(userId: string, characterId: string, rating: number): Promise<void> {
+    return this.withRetry(() =>
+      db
+        .insert(userCharacterRatings)
+        .values({ userId, characterId, rating })
+        .onConflictDoUpdate({
+          target: [userCharacterRatings.userId, userCharacterRatings.characterId],
+          set: { rating },
+        })
+        .then(() => undefined)
+    );
+  }
+
+  async getCharacterRatings(userId: string): Promise<{ characterId: string; rating: number }[]> {
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(userCharacterRatings)
+        .where(eq(userCharacterRatings.userId, userId))
+        .then((rows) => rows.map((r) => ({ characterId: r.characterId, rating: r.rating })))
     );
   }
 }

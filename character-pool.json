@@ -1,0 +1,377 @@
+{
+  "version": 1,
+  "description": "Character pool for AniStar onboarding Option 2 (gameshow). Each character has archetype tags used to bias selection by display name vibes, and a 'represents' field that captures the emotional/psychological space they occupy. Used to seed the FF network with character preference signals.",
+  "note": "mal_id fields are placeholders (null). They are not required for the gameshow itself — character matching uses the 'represents' text via CLIP embedding. If you want to link to MAL pages or fetch images, populate mal_id by looking up each character on myanimelist.net.",
+  "characters": [
+    {
+      "id": "rock_lee",
+      "name": "Rock Lee",
+      "anime": "Naruto",
+      "mal_id": null,
+      "tags": ["determined", "underdog", "loyal", "self-disciplined", "earnest"],
+      "represents": "The student whose love for his teacher and his own self-imposed rules became the engine of a strength nobody believed he could earn."
+    },
+    {
+      "id": "asta",
+      "name": "Asta",
+      "anime": "Black Clover",
+      "mal_id": null,
+      "tags": ["underdog", "loud", "loyal", "earnest", "found-family"],
+      "represents": "The boy with no magic who decided friends would be family, and refused every limit the world tried to set on him."
+    },
+    {
+      "id": "shinra",
+      "name": "Shinra Kusakabe",
+      "anime": "Fire Force",
+      "mal_id": null,
+      "tags": ["determined", "heroic", "haunted", "promise-driven"],
+      "represents": "The boy who carries an impossible promise like a torch, becoming a hero because someone has to be."
+    },
+    {
+      "id": "kamina",
+      "name": "Kamina",
+      "anime": "Gurren Lagann",
+      "mal_id": null,
+      "tags": ["loud", "heroic", "loyal", "symbol", "fearless"],
+      "represents": "The big brother who became a legend on purpose so his little brother could see what he was capable of becoming."
+    },
+    {
+      "id": "gaara",
+      "name": "Gaara",
+      "anime": "Naruto",
+      "mal_id": null,
+      "tags": ["broken", "two-natures", "growth", "lonely-to-connected"],
+      "represents": "The child weaponized into a monster who became a voice of reason after learning what it meant to be loved."
+    },
+    {
+      "id": "natsu",
+      "name": "Natsu Dragneel",
+      "anime": "Fairy Tail",
+      "mal_id": null,
+      "tags": ["loud", "naive-genius", "righteous-rage", "found-family", "loyal"],
+      "represents": "The dumb-looking warrior whose battle instincts are sharper than anyone expects, fueled by rage on behalf of the people he loves."
+    },
+    {
+      "id": "obito",
+      "name": "Obito Uchiha",
+      "anime": "Naruto",
+      "mal_id": null,
+      "tags": ["broken", "redemption", "two-natures", "haunted", "sacrifice"],
+      "represents": "The boy who watched love be twisted into ruin, became a villain, and then died trying to save the world from what he had become."
+    },
+    {
+      "id": "anos",
+      "name": "Anos Voldigoad",
+      "anime": "The Misfit of Demon King Academy",
+      "mal_id": null,
+      "tags": ["overpowered", "magnanimous", "strategist", "displaced-king"],
+      "represents": "The original demon king who, told an imposter had taken his place, simply set about helping the imposter live up to the role."
+    },
+    {
+      "id": "kuroko",
+      "name": "Kuroko Tetsuya",
+      "anime": "Kuroko no Basket",
+      "mal_id": null,
+      "tags": ["underdog", "support-role", "earnest", "self-defined"],
+      "represents": "The player who couldn't shoot but became indispensable by being exactly where the ball needed to be, every single time."
+    },
+    {
+      "id": "tamaki",
+      "name": "Tamaki Kotatsu",
+      "anime": "Fire Force",
+      "mal_id": null,
+      "tags": ["awkward", "self-acceptance", "growth", "earnest"],
+      "represents": "The girl who keeps being thrown into situations she didn't ask for and slowly learns to own herself instead of apologizing for existing."
+    },
+    {
+      "id": "yami",
+      "name": "Yami Sukehiro",
+      "anime": "Black Clover",
+      "mal_id": null,
+      "tags": ["mentor", "unconventional", "tough-love", "dark", "loyal"],
+      "represents": "The captain who breaks every rule and demands the impossible because he sees what his subordinates can become before they do."
+    },
+    {
+      "id": "kaneki",
+      "name": "Ken Kaneki",
+      "anime": "Tokyo Ghoul",
+      "mal_id": null,
+      "tags": ["two-natures", "broken", "horror", "identity-crisis", "haunted"],
+      "represents": "The boy and the ghoul fighting for the same body, neither of them sure which one deserves to win."
+    },
+    {
+      "id": "deku",
+      "name": "Izuku Midoriya",
+      "anime": "My Hero Academia",
+      "mal_id": null,
+      "tags": ["underdog", "earnest", "studious", "hero", "self-made"],
+      "represents": "The quirkless kid who almost gave up on his dream, then earned every inch of the future he refused to let go of."
+    },
+    {
+      "id": "kenichi",
+      "name": "Kenichi Shirahama",
+      "anime": "Kenichi: The Mightiest Disciple",
+      "mal_id": null,
+      "tags": ["underdog", "afraid-but-trying", "self-improvement", "earnest"],
+      "represents": "The weak, scared kid who chose to face terrifying odds anyway because giving up was the one thing he wouldn't do."
+    },
+    {
+      "id": "baki",
+      "name": "Baki Hanma",
+      "anime": "Baki",
+      "mal_id": null,
+      "tags": ["heir", "obsessive", "self-defining", "hardened"],
+      "represents": "The son born into impossible expectations who chose to live up to them even after learning they were a lie."
+    },
+    {
+      "id": "yujiro",
+      "name": "Yujiro Hanma",
+      "anime": "Baki",
+      "mal_id": null,
+      "tags": ["overpowered", "monstrous", "self-defining", "alone-at-the-top"],
+      "represents": "The strongest creature on earth, who became that way because being stronger than everyone was the only goal that ever made sense to him."
+    },
+    {
+      "id": "luffy",
+      "name": "Monkey D. Luffy",
+      "anime": "One Piece",
+      "mal_id": null,
+      "tags": ["free-spirit", "loud", "loyal", "naive-genius", "found-family"],
+      "represents": "The boy who declared he would be the freest man alive and then lived every day as if that were already true."
+    },
+    {
+      "id": "sanji",
+      "name": "Sanji",
+      "anime": "One Piece",
+      "mal_id": null,
+      "tags": ["romantic", "loyal", "haunted", "tender", "loved-deeply"],
+      "represents": "The cook who wants to be loved more than anything because he loves more deeply than he can say."
+    },
+    {
+      "id": "zoro",
+      "name": "Roronoa Zoro",
+      "anime": "One Piece",
+      "mal_id": null,
+      "tags": ["lone-wolf", "ashura-path", "loyal", "obsessive", "haunted"],
+      "represents": "The swordsman who walked the lonely road of strength after losing his first love, sacrificing everything else for the promise."
+    },
+    {
+      "id": "invincible",
+      "name": "Mark Grayson",
+      "anime": "Invincible",
+      "mal_id": null,
+      "tags": ["betrayed", "heir", "two-natures", "moral-struggle"],
+      "represents": "The boy who believed in his father completely and now has to figure out what kind of hero he can become without that lie."
+    },
+    {
+      "id": "blackstar",
+      "name": "Black Star",
+      "anime": "Soul Eater",
+      "mal_id": null,
+      "tags": ["loud", "fearless", "self-defining", "arrogant-earned"],
+      "represents": "The assassin's son with one goal — surpass God — who never once questioned whether the goal made sense."
+    },
+    {
+      "id": "guts",
+      "name": "Guts",
+      "anime": "Berserk",
+      "mal_id": null,
+      "tags": ["broken", "haunted", "ashura-path", "refuses-to-fall", "darkness"],
+      "represents": "The man who refuses to let despair have the final word, fighting because stopping would mean the darkness was right about him."
+    },
+
+    {
+      "id": "eren",
+      "name": "Eren Yeager",
+      "anime": "Attack on Titan",
+      "mal_id": null,
+      "tags": ["rage", "broken", "self-defining", "haunted", "extremist"],
+      "represents": "The boy who watched his world burn and turned his rage into a religion, walking forward until there was nothing left."
+    },
+    {
+      "id": "yusuke",
+      "name": "Yusuke Urameshi",
+      "anime": "Yu Yu Hakusho",
+      "mal_id": null,
+      "tags": ["delinquent", "earnest-underneath", "loyal", "second-chance"],
+      "represents": "The street kid who died protecting a child in the first episode and spent the rest of his life earning the second chance he was given."
+    },
+    {
+      "id": "joseph",
+      "name": "Joseph Joestar",
+      "anime": "JoJo's Bizarre Adventure: Battle Tendency",
+      "mal_id": null,
+      "tags": ["naive-genius", "loud", "trickster", "shameless", "tactical"],
+      "represents": "The hero who survives by being smarter, weirder, and more shameless than anyone gives him credit for."
+    },
+    {
+      "id": "meliodas",
+      "name": "Meliodas",
+      "anime": "The Seven Deadly Sins",
+      "mal_id": null,
+      "tags": ["haunted", "ancient-guilt", "loyal", "loud-mask"],
+      "represents": "The sin-bearer carrying three thousand years of guilt who keeps showing up for the people he loves anyway."
+    },
+    {
+      "id": "soma",
+      "name": "Soma Yukihira",
+      "anime": "Food Wars",
+      "mal_id": null,
+      "tags": ["underdog", "self-made", "earnest", "competitive"],
+      "represents": "The legend's son who refused to coast on his name and earned every win from scratch in the kitchen."
+    },
+    {
+      "id": "senku",
+      "name": "Senku Ishigami",
+      "anime": "Dr. Stone",
+      "mal_id": null,
+      "tags": ["genius", "rebuilder", "earnest", "self-made", "scientific"],
+      "represents": "The genius who decided he would rebuild civilization from zero, alone if he had to, because the path didn't exist until he made it."
+    },
+    {
+      "id": "thorfinn",
+      "name": "Thorfinn",
+      "anime": "Vinland Saga",
+      "mal_id": null,
+      "tags": ["two-natures", "vengeance-to-peace", "haunted", "growth", "broken"],
+      "represents": "The boy who lived for vengeance and the man who has to learn how to live without it after the world he built collapses."
+    },
+    {
+      "id": "saitama",
+      "name": "Saitama",
+      "anime": "One Punch Man",
+      "mal_id": null,
+      "tags": ["overpowered", "tragic-comedy", "alone-at-the-top", "wanted-it-too-much"],
+      "represents": "The hero who got the strength he wanted and lost everything that made wanting it worthwhile."
+    },
+    {
+      "id": "hyakkimaru",
+      "name": "Hyakkimaru",
+      "anime": "Dororo",
+      "mal_id": null,
+      "tags": ["underdog", "mythic", "self-reclamation", "haunted", "wordless"],
+      "represents": "The boy born missing every part of himself, reclaiming his own body piece by piece from the demons that took it."
+    },
+    {
+      "id": "vash",
+      "name": "Vash the Stampede",
+      "anime": "Trigun",
+      "mal_id": null,
+      "tags": ["pacifist", "haunted", "kind-mask", "righteous", "burdened"],
+      "represents": "The gunslinger who carries impossible weight under a goofy mask and chooses kindness in a world that gave him every reason not to."
+    },
+    {
+      "id": "gon",
+      "name": "Gon Freecss",
+      "anime": "Hunter x Hunter",
+      "mal_id": null,
+      "tags": ["determined", "naive", "obsessive", "dark-edge", "loyal"],
+      "represents": "The cheerful boy whose determination has a darker edge the show eventually examines with brutal honesty."
+    },
+    {
+      "id": "edward",
+      "name": "Edward Elric",
+      "anime": "Fullmetal Alchemist: Brotherhood",
+      "mal_id": null,
+      "tags": ["heir", "guilty", "self-made", "no-shortcuts", "loyal-brother"],
+      "represents": "The boy who paid for his hubris with his body and his brother's, then spent his life trying to make it right without taking shortcuts."
+    },
+
+    {
+      "id": "lelouch",
+      "name": "Lelouch vi Britannia",
+      "anime": "Code Geass",
+      "mal_id": null,
+      "tags": ["strategist", "cold", "manipulator", "morally-grey", "lonely"],
+      "represents": "The cold strategist who treats people as variables and lies even to those who love him, willing to be the villain history needs."
+    },
+    {
+      "id": "light",
+      "name": "Light Yagami",
+      "anime": "Death Note",
+      "mal_id": null,
+      "tags": ["genius", "given-power", "god-complex", "morally-corrupted"],
+      "represents": "The honor student who got the power of a god handed to him and used it to become the worst version of righteousness."
+    },
+    {
+      "id": "shinji",
+      "name": "Shinji Ikari",
+      "anime": "Neon Genesis Evangelion",
+      "mal_id": null,
+      "tags": ["broken", "afraid", "honest-fragility", "abandoned"],
+      "represents": "The boy who can't will himself forward, who breaks under the weight others carry without complaint, honest about how hard it really is."
+    },
+    {
+      "id": "okabe",
+      "name": "Okabe Rintaro",
+      "anime": "Steins;Gate",
+      "mal_id": null,
+      "tags": ["chuunibyou-mask", "earned-gravity", "scientist", "loyal", "shattered-then-rebuilt"],
+      "represents": "The mad scientist whose silly performance becomes real grief once he learns what the cost of caring actually looks like."
+    },
+    {
+      "id": "ginko",
+      "name": "Ginko",
+      "anime": "Mushishi",
+      "mal_id": null,
+      "tags": ["wanderer", "observer", "no-conflict", "quiet", "watcher"],
+      "represents": "The wandering observer who never tries to win or surpass anyone, just witnesses the strangeness of the world and lets it be."
+    },
+    {
+      "id": "spike",
+      "name": "Spike Spiegel",
+      "anime": "Cowboy Bebop",
+      "mal_id": null,
+      "tags": ["drifter", "past-haunted", "lonely", "no-future", "cool"],
+      "represents": "The bounty hunter living in the past, drifting toward an ending he already knows is waiting for him."
+    },
+    {
+      "id": "holo",
+      "name": "Holo",
+      "anime": "Spice and Wolf",
+      "mal_id": null,
+      "tags": ["wise", "ancient", "playful", "lonely", "feminine-power"],
+      "represents": "The wolf goddess older and wiser than anyone in the room, whose strength is patience and whose loneliness is centuries deep."
+    },
+    {
+      "id": "reigen",
+      "name": "Reigen Arataka",
+      "anime": "Mob Psycho 100",
+      "mal_id": null,
+      "tags": ["fraud", "decent", "no-power", "presence", "mentor"],
+      "represents": "The con man with no powers and no destiny who builds something genuinely real out of pure presence and ordinary decency."
+    },
+    {
+      "id": "violet",
+      "name": "Violet Evergarden",
+      "anime": "Violet Evergarden",
+      "mal_id": null,
+      "tags": ["learning-to-feel", "tender", "broken", "soldier-becoming-human"],
+      "represents": "The child soldier learning what love means by writing letters for other people, finding her humanity word by word."
+    },
+    {
+      "id": "L",
+      "name": "L Lawliet",
+      "anime": "Death Note",
+      "mal_id": null,
+      "tags": ["genius", "no-narrative", "truth-seeker", "alone", "eccentric"],
+      "represents": "Pure intellect with no heroic narrative and no growth arc, just the patient pursuit of the truth no matter what it costs."
+    },
+    {
+      "id": "mob",
+      "name": "Shigeo 'Mob' Kageyama",
+      "anime": "Mob Psycho 100",
+      "mal_id": null,
+      "tags": ["overpowered", "humble", "anti-power", "ordinary-by-choice", "growth"],
+      "represents": "The strongest psychic alive who actively decides his power is the least important thing about him, choosing to be ordinary on purpose."
+    },
+    {
+      "id": "dazai",
+      "name": "Osamu Dazai",
+      "anime": "Bungo Stray Dogs",
+      "mal_id": null,
+      "tags": ["brilliant", "death-wish", "manipulator", "haunted", "playful-mask"],
+      "represents": "The brilliant detective wrapped around a death wish, living sideways to every meaning he could choose."
+    }
+  ]
+}

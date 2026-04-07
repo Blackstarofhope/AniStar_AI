@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, real, serial, timestamp, jsonb, unique, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, real, serial, timestamp, jsonb, unique, primaryKey, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -90,6 +90,25 @@ export const userChatUsage = pgTable("user_chat_usage", {
   messageCount: integer("message_count").notNull().default(0),
 }, (t) => ({
   pk: primaryKey({ columns: [t.userId, t.date] }),
+}));
+
+export const userOnboarding = pgTable("user_onboarding", {
+  userId: text("user_id").primaryKey(),
+  pathChosen: text("path_chosen"),
+  completed: boolean("completed").notNull().default(false),
+  unlockedRecommendations: boolean("unlocked_recommendations").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+});
+
+export const userCharacterRatings = pgTable("user_character_ratings", {
+  id: serial("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  characterId: text("character_id").notNull(),
+  rating: integer("rating").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  userCharUnique: unique("user_character_ratings_user_char_unique").on(t.userId, t.characterId),
 }));
 
 export const insertUserSchema = createInsertSchema(users).pick({
