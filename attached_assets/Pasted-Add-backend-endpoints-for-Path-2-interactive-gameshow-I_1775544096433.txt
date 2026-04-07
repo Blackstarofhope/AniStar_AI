@@ -1,0 +1,35 @@
+Add backend endpoints for Path 2 (interactive gameshow).
+
+In server/routes.ts, add three endpoints:
+
+ENDPOINT 1: GET /api/onboarding/path2/characters
+- Extract userId via extractUserId
+- Get the user's display name via storage.getDisplayName(userId), fall back to userId
+- Load the character pool via loadCharacterPool() from characterPool.ts
+- Call Claude with this system prompt: "You are choosing 5 anime characters from a pool to show a new user during onboarding. The user's display name is '[displayName]'. Pick 5 characters whose energies feel resonant or interestingly contrasting with that name. Aim for variety — don't pick 5 of the same archetype. Respond with ONLY a JSON array of 5 character ids from the provided pool, no markdown. Example response: [\"lelouch\",\"mob\",\"asta\",\"violet\",\"yujiro\"]"
+- Pass the full character pool as user content (just id, name, anime, and represents fields to keep tokens down)
+- Parse the response, filter to valid ids, ensure exactly 5 — if Claude returns fewer or invalid, fill with random characters from the pool
+- Return the 5 full CharacterEntry objects as JSON: { characters: CharacterEntry[] }
+
+ENDPOINT 2: POST /api/onboarding/path2/genres
+Body: { genres: string[], subDubPreference: "sub" | "dub" | "either" }
+- Extract userId
+- Store the genre selections — create them as positive ratings on a few representative anime per selected genre. Use getAllCurrentAnime, filter to anime matching each selected genre, take top 2 per genre by score, and call processFeedback with rating 0.75 for each.
+- Store the subDubPreference in a new userPreferences column (add subDubPreference text to userPreferences in shared/schema.ts, run drizzle-kit push)
+- Call storage.setOnboardingPath(userId, "gameshow")
+- Return { success: true }
+
+ENDPOINT 3: POST /api/onboarding/path2/rankings
+Body: { rankings: { characterId: string, rating: number }[] } — user's 1-5 rating for each character shown
+- Extract userId
+- For each rating, call storage.saveCharacterRating(userId, characterId, rating)
+- Convert character ratings into recommendation training:
+  - For each character rated 4 or 5: get the character's "represents" text from the pool, CLIP-encode it, and use as a positive embedding via processFeedback with a synthesized animeId (use the character's anime mal_id if you can map it, otherwise just train the FF network directly on the embedding without persisting as a rating)
+  - Actually simpler approach: search Jikan for the character's anime title via searchAndAddAnime, then call processFeedback on those mal_ids with rating 0.5 + (characterRating - 1) * 0.15 (so a 1-star = 0.5, 5-star = 1.1 clamped to 1.0)
+- After processing rankings, generate the three recommendations:
+  a) Call getThreeLaneRecommendations(userId, 12000) — but only take the top 2 from "safe" lane (these will be the "shown" picks) and 1 from the "blind" lane (this will be the hidden/instinct pick)
+  b) The blind pick should be flagged with a special "blindspot" property: { blindspot: true, starMessage: "I cannot see this one clearly... but something pulls me toward it for you. Trust the instinct." }
+- Call storage.unlockRecommendations(userId) and storage.completeOnboarding(userId)
+- Return { shown: Recommendation[], hidden: Recommendation }
+
+Do not modify any client files.

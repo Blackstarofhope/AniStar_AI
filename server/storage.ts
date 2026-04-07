@@ -73,6 +73,7 @@ export interface IStorage {
 
   setHiddenGemBias(userId: string, bias: number): Promise<void>;
   getHiddenGemBias(userId: string): Promise<number>;
+  setSubDubPreference(userId: string, pref: string): Promise<void>;
 
   incrementChatCount(userId: string, date: string): Promise<number>;
   getChatCount(userId: string, date: string): Promise<number>;
@@ -422,6 +423,19 @@ class PostgresStorage implements IStorage {
         .from(userPreferences)
         .where(eq(userPreferences.userId, userId))
         .then((rows) => rows[0]?.hiddenGemBias ?? 0.5)
+    );
+  }
+
+  async setSubDubPreference(userId: string, pref: string): Promise<void> {
+    return this.withRetry(() =>
+      db
+        .insert(userPreferences)
+        .values({ userId, subDubPreference: pref, updatedAt: new Date() })
+        .onConflictDoUpdate({
+          target: userPreferences.userId,
+          set: { subDubPreference: pref, updatedAt: new Date() },
+        })
+        .then(() => undefined)
     );
   }
 

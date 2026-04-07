@@ -80,6 +80,7 @@ export const userWatchState = pgTable("user_watch_state", {
 export const userPreferences = pgTable("user_preferences", {
   userId: text("user_id").primaryKey(),
   hiddenGemBias: real("hidden_gem_bias").notNull().default(0.5),
+  subDubPreference: text("sub_dub_preference"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

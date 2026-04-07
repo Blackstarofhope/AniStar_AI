@@ -13,6 +13,8 @@ import { processChat, STAR_NAME, STAR_BIO } from "./ai/starChat.js";
 import type { ChatMessage } from "./ai/starChat.js";
 import { initStarLearning, recordChatFeedback } from "./ai/starLearning.js";
 import { embedAnimeWithVibeFallback, type AnimeInfo } from "./ai/textEmbedder.js";
+import { loadCharacterPool, type CharacterEntry } from "./ai/characterPool.js";
+import type { Recommendation } from "./ai/recommendEngine.js";
 
 function extractUserId(req: Request): string {
   const raw =
@@ -29,56 +31,61 @@ function extractUserId(req: Request): string {
 const CLAUDE_ONBOARDING_ENDPOINT = "https://api.anthropic.com/v1/messages";
 const CLAUDE_ONBOARDING_MODEL = "claude-sonnet-4-20250514";
 
-async function processPath1Favorites(userId: string, favoritesText: string): Promise<void> {
+async function claudeJsonCall(
+  systemPrompt: string,
+  userContent: string,
+  maxTokens = 512
+): Promise<string> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    console.warn("[Path1] No ANTHROPIC_API_KEY — skipping Claude parse, completing onboarding");
-    await storage.completeOnboarding(userId).catch(() => {});
-    return;
-  }
+  if (!apiKey) throw new Error("No ANTHROPIC_API_KEY");
 
+  const payload = JSON.stringify({
+    model: CLAUDE_ONBOARDING_MODEL,
+    max_tokens: maxTokens,
+    system: systemPrompt,
+    messages: [{ role: "user", content: userContent }],
+  });
+
+  return new Promise<string>((resolve, reject) => {
+    const url = new URL(CLAUDE_ONBOARDING_ENDPOINT);
+    const options = {
+      hostname: url.hostname,
+      path: url.pathname,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "Content-Length": Buffer.byteLength(payload),
+      },
+    };
+    const req = https.request(options, (res) => {
+      let data = "";
+      res.on("data", (chunk: Buffer) => { data += chunk.toString(); });
+      res.on("end", () => {
+        if ((res.statusCode ?? 0) >= 400) {
+          reject(new Error(`Claude HTTP ${res.statusCode}: ${data.slice(0, 200)}`));
+        } else {
+          const json = JSON.parse(data) as { content?: { text?: string }[] };
+          resolve(json?.content?.[0]?.text?.trim() ?? "");
+        }
+      });
+    });
+    req.on("error", reject);
+    req.setTimeout(25000, () => { req.destroy(new Error("Claude request timed out")); });
+    req.write(payload);
+    req.end();
+  });
+}
+
+async function processPath1Favorites(userId: string, favoritesText: string): Promise<void> {
   let entries: { title: string; reason: string | null }[] = [];
   try {
-    const payload = JSON.stringify({
-      model: CLAUDE_ONBOARDING_MODEL,
-      max_tokens: 1024,
-      system:
-        "Parse this list of favorite anime. Extract a JSON array where each entry has: title (string), reason (string — the user's stated reason or null if not given). Respond with ONLY valid JSON, no markdown.",
-      messages: [{ role: "user", content: favoritesText }],
-    });
-
-    const raw = await new Promise<string>((resolve, reject) => {
-      const url = new URL(CLAUDE_ONBOARDING_ENDPOINT);
-      const options = {
-        hostname: url.hostname,
-        path: url.pathname,
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "Content-Length": Buffer.byteLength(payload),
-        },
-      };
-      const req = https.request(options, (res) => {
-        let data = "";
-        res.on("data", (chunk: Buffer) => { data += chunk.toString(); });
-        res.on("end", () => {
-          if ((res.statusCode ?? 0) >= 400) {
-            reject(new Error(`Claude HTTP ${res.statusCode}: ${data.slice(0, 200)}`));
-          } else {
-            resolve(data);
-          }
-        });
-      });
-      req.on("error", reject);
-      req.setTimeout(25000, () => { req.destroy(new Error("Claude request timed out")); });
-      req.write(payload);
-      req.end();
-    });
-
-    const responseJson = JSON.parse(raw) as { content?: { text?: string }[] };
-    const text = responseJson?.content?.[0]?.text?.trim() ?? "";
+    const text = await claudeJsonCall(
+      "Parse this list of favorite anime. Extract a JSON array where each entry has: title (string), reason (string — the user's stated reason or null if not given). Respond with ONLY valid JSON, no markdown.",
+      favoritesText,
+      1024
+    );
     const result = JSON.parse(text);
     if (Array.isArray(result)) entries = result as { title: string; reason: string | null }[];
   } catch (e) {
@@ -553,6 +560,189 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ---------------------------------------------------------------------------
   // Onboarding endpoints
   // ---------------------------------------------------------------------------
+
+  // Path 2 — Endpoint 1: Pick 5 characters personalised to the user's display name
+  app.get("/api/onboarding/path2/characters", async (req: Request, res: Response) => {
+    const userId = extractUserId(req);
+    try {
+      const displayName = (await storage.getDisplayName(userId)) ?? userId;
+      const pool = loadCharacterPool();
+      const poolText = JSON.stringify(
+        pool.map((c) => ({ id: c.id, name: c.name, anime: c.anime, represents: c.represents }))
+      );
+      const systemPrompt =
+        `You are choosing 5 anime characters from a pool to show a new user during onboarding. ` +
+        `The user's display name is '${displayName}'. ` +
+        `Pick 5 characters whose energies feel resonant or interestingly contrasting with that name. ` +
+        `Aim for variety — don't pick 5 of the same archetype. ` +
+        `Respond with ONLY a JSON array of 5 character ids from the provided pool, no markdown. ` +
+        `Example response: ["lelouch","mob","asta","violet","yujiro"]`;
+
+      let selectedIds: string[] = [];
+      try {
+        const text = await claudeJsonCall(systemPrompt, poolText, 120);
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) {
+          const validIds = new Set(pool.map((c) => c.id));
+          selectedIds = (parsed as string[]).filter((id) => validIds.has(id)).slice(0, 5);
+        }
+      } catch (e) {
+        console.error("[Path2/characters] Claude selection failed:", e instanceof Error ? e.message : e);
+      }
+
+      // Fill to 5 with random characters if Claude returned fewer or errored
+      if (selectedIds.length < 5) {
+        const usedIds = new Set(selectedIds);
+        const remaining = pool.filter((c) => !usedIds.has(c.id));
+        for (let i = remaining.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [remaining[i], remaining[j]] = [remaining[j], remaining[i]];
+        }
+        while (selectedIds.length < 5 && remaining.length > 0) {
+          selectedIds.push(remaining.shift()!.id);
+        }
+      }
+
+      const idMap = new Map(pool.map((c) => [c.id, c]));
+      const characters: CharacterEntry[] = selectedIds.map((id) => idMap.get(id)!).filter(Boolean);
+
+      res.json({ characters });
+    } catch (e) {
+      console.error("[Path2/characters] Error:", e instanceof Error ? e.message : e);
+      res.status(500).json({ error: "Failed to load characters" });
+    }
+  });
+
+  // Path 2 — Endpoint 2: Record genre preferences and sub/dub preference
+  app.post("/api/onboarding/path2/genres", async (req: Request, res: Response) => {
+    const userId = extractUserId(req);
+    const { genres, subDubPreference } = req.body as {
+      genres?: string[];
+      subDubPreference?: string;
+    };
+
+    if (!Array.isArray(genres) || genres.length === 0) {
+      return res.status(400).json({ error: "genres array is required" });
+    }
+
+    try {
+      await storage.setOnboardingPath(userId, "gameshow");
+    } catch (e) {
+      console.error("[Path2/genres] setOnboardingPath failed:", e instanceof Error ? e.message : e);
+    }
+
+    if (subDubPreference && typeof subDubPreference === "string") {
+      await storage.setSubDubPreference(userId, subDubPreference).catch((e) =>
+        console.error("[Path2/genres] setSubDubPreference failed:", e instanceof Error ? e.message : e)
+      );
+    }
+
+    // Fire-and-forget: embed genre representatives into the user's engine
+    setImmediate(async () => {
+      try {
+        const allAnime = await getAllCurrentAnime();
+        for (const genre of genres) {
+          const matching = allAnime
+            .filter((a) => a.genres?.some((g) => g.name.toLowerCase() === genre.toLowerCase()))
+            .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+            .slice(0, 2);
+          for (const anime of matching) {
+            try {
+              const embedding = await embedAnimeWithVibeFallback(anime as unknown as AnimeInfo);
+              await addAnimeEmbeddings(userId, [{ animeId: anime.mal_id, embedding }]);
+              await processFeedback(anime.mal_id, 0.75, userId);
+              console.log(`[Path2/genres] Trained "${anime.title}" for genre "${genre}" user=${userId}`);
+            } catch (e) {
+              console.error(`[Path2/genres] Failed on "${anime.title}":`, e instanceof Error ? e.message : e);
+            }
+          }
+        }
+      } catch (e) {
+        console.error("[Path2/genres] Background failed:", e instanceof Error ? e.message : e);
+      }
+    });
+
+    res.json({ success: true });
+  });
+
+  // Path 2 — Endpoint 3: Submit character rankings, train engine, return initial recs
+  app.post("/api/onboarding/path2/rankings", async (req: Request, res: Response) => {
+    const userId = extractUserId(req);
+    const { rankings } = req.body as {
+      rankings?: { characterId: string; rating: number }[];
+    };
+
+    if (!Array.isArray(rankings) || rankings.length === 0) {
+      return res.status(400).json({ error: "rankings array is required" });
+    }
+
+    const pool = loadCharacterPool();
+    const characterById = new Map(pool.map((c) => [c.id, c]));
+
+    // Process every ranking — save rating and train the engine
+    for (const { characterId, rating } of rankings) {
+      await storage.saveCharacterRating(userId, characterId, rating).catch((e) =>
+        console.error(`[Path2/rankings] saveCharacterRating failed (${characterId}):`, e instanceof Error ? e.message : e)
+      );
+
+      const character = characterById.get(characterId);
+      if (!character) continue;
+
+      // rating 1→0.50, 2→0.65, 3→0.80, 4→0.95, 5→1.00 (clamped)
+      const feedbackScore = Math.min(1.0, 0.5 + (rating - 1) * 0.15);
+
+      try {
+        const results = await searchAndAddAnime(character.anime);
+        const anime = results[0];
+        if (!anime) continue;
+
+        const embedding = await embedAnimeWithVibeFallback(anime as unknown as AnimeInfo);
+        await addAnimeEmbeddings(userId, [{ animeId: anime.mal_id, embedding }]);
+        await processFeedback(anime.mal_id, feedbackScore, userId);
+        console.log(
+          `[Path2/rankings] "${character.name}" → "${anime.title}" score=${feedbackScore.toFixed(2)} user=${userId}`
+        );
+      } catch (e) {
+        console.error(`[Path2/rankings] Failed to process "${character.name}":`, e instanceof Error ? e.message : e);
+      }
+    }
+
+    // Complete onboarding
+    try {
+      await storage.unlockRecommendations(userId);
+      await storage.completeOnboarding(userId);
+    } catch (e) {
+      console.error("[Path2/rankings] Failed to complete onboarding:", e instanceof Error ? e.message : e);
+    }
+
+    // Generate initial recommendations — safe[0..1] shown, blind[0] hidden
+    let shown: Recommendation[] = [];
+    let hidden: (Recommendation & { blindspot: true; starMessage: string }) | null = null;
+
+    try {
+      const lanes = await getThreeLaneRecommendations(userId, 12000);
+      shown = lanes.safe.slice(0, 2);
+
+      // If safe lane is thin, fill from stretch
+      if (shown.length < 2) {
+        shown = [...shown, ...lanes.stretch.slice(0, 2 - shown.length)];
+      }
+
+      const blindPick = lanes.blind[0];
+      if (blindPick) {
+        hidden = {
+          ...blindPick,
+          blindspot: true,
+          starMessage:
+            "I cannot see this one clearly... but something pulls me toward it for you. Trust the instinct.",
+        };
+      }
+    } catch (e) {
+      console.error("[Path2/rankings] getThreeLaneRecommendations failed:", e instanceof Error ? e.message : e);
+    }
+
+    res.json({ shown, hidden });
+  });
 
   app.post("/api/onboarding/path1", async (req: Request, res: Response) => {
     const userId = extractUserId(req);
