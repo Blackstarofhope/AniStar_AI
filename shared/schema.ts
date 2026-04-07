@@ -111,6 +111,15 @@ export const userCharacterRatings = pgTable("user_character_ratings", {
   userCharUnique: unique("user_character_ratings_user_char_unique").on(t.userId, t.characterId),
 }));
 
+export const animeReasons = pgTable("anime_reasons", {
+  userId: text("user_id").notNull(),
+  malId: integer("mal_id").notNull(),
+  reason: text("reason").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.userId, t.malId] }),
+}));
+
 export const insertUserSchema = createInsertSchema(users).pick({
   username: true,
   password: true,

@@ -5,7 +5,7 @@ import {
   users, userEngineState, animeSearched, vibeProfiles,
   userRatings, animeDiscovery, userProfiles,
   userBanList, userWatchState, userPreferences, userChatUsage,
-  userOnboarding, userCharacterRatings,
+  userOnboarding, userCharacterRatings, animeReasons,
   type InsertUser, type User,
 } from "@shared/schema";
 
@@ -83,6 +83,8 @@ export interface IStorage {
   unlockRecommendations(userId: string): Promise<void>;
   saveCharacterRating(userId: string, characterId: string, rating: number): Promise<void>;
   getCharacterRatings(userId: string): Promise<{ characterId: string; rating: number }[]>;
+
+  saveAnimeReason(userId: string, malId: number, reason: string): Promise<void>;
 }
 
 class PostgresStorage implements IStorage {
@@ -523,6 +525,19 @@ class PostgresStorage implements IStorage {
         .from(userCharacterRatings)
         .where(eq(userCharacterRatings.userId, userId))
         .then((rows) => rows.map((r) => ({ characterId: r.characterId, rating: r.rating })))
+    );
+  }
+
+  async saveAnimeReason(userId: string, malId: number, reason: string): Promise<void> {
+    return this.withRetry(() =>
+      db
+        .insert(animeReasons)
+        .values({ userId, malId, reason })
+        .onConflictDoUpdate({
+          target: [animeReasons.userId, animeReasons.malId],
+          set: { reason },
+        })
+        .then(() => undefined)
     );
   }
 }

@@ -1,16 +1,18 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
+import * as https from "https";
 import { storage, testConnection } from "./storage.js";
 import {
   getRecommendations, getThreeLaneRecommendations, processFeedback, getAIStatus, verifyAnimeArtwork,
-  restTrain, hasRestTrained
+  restTrain, hasRestTrained, addAnimeEmbeddings,
 } from "./ai/recommendEngine.js";
-import { getSchedule, getSeasonalAnime, getAnimeDetails, getAllCurrentAnime, initAnimeData, getSearchedCacheEntries } from "./ai/animeData.js";
+import { getSchedule, getSeasonalAnime, getAnimeDetails, getAllCurrentAnime, initAnimeData, getSearchedCacheEntries, searchAndAddAnime } from "./ai/animeData.js";
 import { validateImageUrl } from "./ai/visionVerifier.js";
 import { generateVibeProfile, getVibeProfileFromCache } from "./ai/vibeProfiler.js";
 import { processChat, STAR_NAME, STAR_BIO } from "./ai/starChat.js";
 import type { ChatMessage } from "./ai/starChat.js";
 import { initStarLearning, recordChatFeedback } from "./ai/starLearning.js";
+import { embedAnimeWithVibeFallback, type AnimeInfo } from "./ai/textEmbedder.js";
 
 function extractUserId(req: Request): string {
   const raw =
@@ -18,6 +20,99 @@ function extractUserId(req: Request): string {
     (req.headers["x-user-id"] as string | undefined) ||
     "default";
   return raw.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64) || "default";
+}
+
+// ---------------------------------------------------------------------------
+// Path 1 onboarding — async background processor
+// ---------------------------------------------------------------------------
+
+const CLAUDE_ONBOARDING_ENDPOINT = "https://api.anthropic.com/v1/messages";
+const CLAUDE_ONBOARDING_MODEL = "claude-sonnet-4-20250514";
+
+async function processPath1Favorites(userId: string, favoritesText: string): Promise<void> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    console.warn("[Path1] No ANTHROPIC_API_KEY — skipping Claude parse, completing onboarding");
+    await storage.completeOnboarding(userId).catch(() => {});
+    return;
+  }
+
+  let entries: { title: string; reason: string | null }[] = [];
+  try {
+    const payload = JSON.stringify({
+      model: CLAUDE_ONBOARDING_MODEL,
+      max_tokens: 1024,
+      system:
+        "Parse this list of favorite anime. Extract a JSON array where each entry has: title (string), reason (string — the user's stated reason or null if not given). Respond with ONLY valid JSON, no markdown.",
+      messages: [{ role: "user", content: favoritesText }],
+    });
+
+    const raw = await new Promise<string>((resolve, reject) => {
+      const url = new URL(CLAUDE_ONBOARDING_ENDPOINT);
+      const options = {
+        hostname: url.hostname,
+        path: url.pathname,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "Content-Length": Buffer.byteLength(payload),
+        },
+      };
+      const req = https.request(options, (res) => {
+        let data = "";
+        res.on("data", (chunk: Buffer) => { data += chunk.toString(); });
+        res.on("end", () => {
+          if ((res.statusCode ?? 0) >= 400) {
+            reject(new Error(`Claude HTTP ${res.statusCode}: ${data.slice(0, 200)}`));
+          } else {
+            resolve(data);
+          }
+        });
+      });
+      req.on("error", reject);
+      req.setTimeout(25000, () => { req.destroy(new Error("Claude request timed out")); });
+      req.write(payload);
+      req.end();
+    });
+
+    const responseJson = JSON.parse(raw) as { content?: { text?: string }[] };
+    const text = responseJson?.content?.[0]?.text?.trim() ?? "";
+    const result = JSON.parse(text);
+    if (Array.isArray(result)) entries = result as { title: string; reason: string | null }[];
+  } catch (e) {
+    console.error("[Path1] Claude parse failed:", e instanceof Error ? e.message : e);
+  }
+
+  for (const entry of entries) {
+    if (!entry.title || typeof entry.title !== "string") continue;
+    try {
+      const results = await searchAndAddAnime(entry.title);
+      const anime = results[0];
+      if (!anime) continue;
+
+      const embedding = await embedAnimeWithVibeFallback(anime as unknown as AnimeInfo);
+      await addAnimeEmbeddings(userId, [{ animeId: anime.mal_id, embedding }]);
+      await processFeedback(anime.mal_id, 0.85, userId);
+
+      if (entry.reason && typeof entry.reason === "string" && entry.reason.trim()) {
+        await storage.saveAnimeReason(userId, anime.mal_id, entry.reason.trim()).catch(() => {});
+      }
+
+      console.log(`[Path1] Processed "${anime.title}" (mal_id=${anime.mal_id}) for user=${userId}`);
+    } catch (e) {
+      console.error(`[Path1] Failed to process "${entry.title}":`, e instanceof Error ? e.message : e);
+    }
+  }
+
+  try {
+    await storage.unlockRecommendations(userId);
+    await storage.completeOnboarding(userId);
+    console.log(`[Path1] Onboarding complete for user=${userId}`);
+  } catch (e) {
+    console.error("[Path1] Failed to complete onboarding:", e instanceof Error ? e.message : e);
+  }
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -453,6 +548,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("[User] getHiddenGemBias error:", e);
       res.status(500).json({ error: "Failed to get preferences" });
     }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Onboarding endpoints
+  // ---------------------------------------------------------------------------
+
+  app.post("/api/onboarding/path1", async (req: Request, res: Response) => {
+    const userId = extractUserId(req);
+    const { favorites } = req.body as { favorites?: string };
+
+    if (!favorites || typeof favorites !== "string" || !favorites.trim()) {
+      return res.status(400).json({ error: "favorites text is required" });
+    }
+
+    try {
+      await storage.setOnboardingPath(userId, "list");
+    } catch (e) {
+      console.error("[Path1] setOnboardingPath failed:", e instanceof Error ? e.message : e);
+    }
+
+    res.json({
+      success: true,
+      message: "I have what I need. Give me a moment to feel out where you're really pulling from...",
+    });
+
+    setImmediate(() => {
+      processPath1Favorites(userId, favorites.trim()).catch((e) =>
+        console.error("[Path1] Unhandled error in background processing:", e)
+      );
+    });
   });
 
   const httpServer = createServer(app);
