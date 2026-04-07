@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import {
   View,
   StyleSheet,
@@ -14,7 +14,7 @@ import {
 import GemSlider from "@/components/GemSlider";
 import { useHeaderHeight } from "@react-navigation/elements";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
@@ -537,7 +537,18 @@ export default function RecommendationsScreen() {
   const navigation = useNavigation<NavProp>();
   const headerHeight = useHeaderHeight();
   const queryClient = useQueryClient();
-  const { userId, onboardingUnlocked } = useUser();
+  const { userId, onboardingUnlocked, refreshOnboardingState } = useUser();
+
+  const focusRefRef = useRef(0);
+  useFocusEffect(
+    useCallback(() => {
+      // Refresh onboarding state on every tab focus so gating/unlocking is always current
+      if (focusRefRef.current > 0) {
+        refreshOnboardingState();
+      }
+      focusRefRef.current += 1;
+    }, [refreshOnboardingState])
+  );
 
   const [statusVisible, setStatusVisible] = useState(false);
   const [banModalVisible, setBanModalVisible] = useState(false);

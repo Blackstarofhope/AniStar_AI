@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback, useRef } from "react";
 import {
   View,
   StyleSheet,
@@ -16,6 +16,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useHeaderHeight } from "@react-navigation/elements";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
+import { useFocusEffect } from "@react-navigation/native";
 import { useQuery, useMutation } from "@tanstack/react-query";
 
 import { ThemedText } from "@/components/ThemedText";
@@ -303,8 +304,18 @@ function DetailModal({
 }
 
 export default function LibraryScreen() {
-  const { userId, onboardingPath, onboardingUnlocked, markOnboardingUnlocked } = useUser();
+  const { userId, onboardingPath, onboardingUnlocked, markOnboardingUnlocked, refreshOnboardingState } = useUser();
   const headerHeight = useHeaderHeight();
+
+  const focusCountRef = useRef(0);
+  useFocusEffect(
+    useCallback(() => {
+      if (focusCountRef.current > 0) {
+        refreshOnboardingState();
+      }
+      focusCountRef.current += 1;
+    }, [refreshOnboardingState])
+  );
   const tabBarHeight = useBottomTabBarHeight();
   const { width } = useWindowDimensions();
 

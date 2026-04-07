@@ -17,8 +17,9 @@ import { ThemedText } from "@/components/ThemedText";
 import { Colors, Spacing, BorderRadius } from "@/constants/theme";
 import { useUser } from "@/contexts/UserContext";
 import { apiRequest } from "@/lib/query-client";
+import GameshowScreen from "@/screens/GameshowScreen";
 
-type SubScreen = "home" | "path1" | "waiting";
+type SubScreen = "home" | "path1" | "waiting" | "gameshow";
 
 const PATHS = [
   {
@@ -36,7 +37,6 @@ const PATHS = [
       "A short interactive ritual. Genres, characters, instincts. Star reads what you pick.",
     icon: "flash-outline" as const,
     accentColor: Colors.dark.accentSecondary,
-    comingSoon: true,
   },
   {
     id: "manual" as const,
@@ -85,6 +85,10 @@ export default function OnboardingScreen() {
     } catch {}
     setPreferredStartTab("LibraryTab");
     setOnboardingPath("manual");
+  }
+
+  if (sub === "gameshow") {
+    return <GameshowScreen onBack={() => setSub("home")} />;
   }
 
   if (sub === "path1") {
@@ -137,6 +141,7 @@ export default function OnboardingScreen() {
             const isComingSoon = "comingSoon" in path && path.comingSoon;
             let onPress = () => {};
             if (path.id === "list") onPress = () => setSub("path1");
+            else if (path.id === "gameshow") onPress = () => setSub("gameshow");
             else if (path.id === "manual") onPress = handleManualPath;
             return (
               <PathCard
