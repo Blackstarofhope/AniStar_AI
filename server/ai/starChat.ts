@@ -222,13 +222,15 @@ async function callClaude(
   history: ChatMessage[],
   userId: string,
   displayName: string,
-  searchContext?: string
+  searchContext?: string,
+  onboardingHint?: string
 ): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
 
   let systemPrompt = await buildStarSystemPrompt(userId, displayName);
   if (searchContext) systemPrompt += "\n\n## Context for this message\n" + searchContext;
+  if (onboardingHint) systemPrompt += "\n\n## Onboarding Guidance\n" + onboardingHint;
 
   const messages = [
     ...history.slice(-6).map((m) => ({
@@ -447,8 +449,43 @@ export async function processChat(
     searchContext = searchContext ? `${chatBanNote}\n\n${searchContext}` : chatBanNote;
   }
 
-  const claudeResponse = await callClaude(message, history, userId, displayName, searchContext);
-  const response = claudeResponse ?? generateStarResponse(signals, matches, noMatchFallbacks, historyLength);
+  // Manual onboarding path: inject a hint when the user has 5+ favorites but recs aren't unlocked yet
+  let onboardingHint: string | undefined;
+  let isManualPath = false;
+  try {
+    const onboarding = await storage.getOnboardingState(userId);
+    if (onboarding?.pathChosen === "manual" && !onboarding.unlockedRecommendations) {
+      isManualPath = true;
+      const ratings = await storage.getUserRatings(userId);
+      const favoritedCount = ratings.filter((r) => r.rating >= 0.6).length;
+      if (favoritedCount >= 5) {
+        onboardingHint =
+          `This user is on the manual onboarding path. They have favorited ${favoritedCount} anime. ` +
+          `If you feel you have enough signal to start recommending, weave it naturally into your next message — ` +
+          `something like "${displayName}, I think I'm starting to see you. Want to know what I see?" ` +
+          `If you decide to unlock, end your message with the literal token [UNLOCK_RECS].`;
+      }
+    }
+  } catch {
+    // non-critical — onboarding hint is best-effort
+  }
+
+  const claudeResponse = await callClaude(message, history, userId, displayName, searchContext, onboardingHint);
+  let response = claudeResponse ?? generateStarResponse(signals, matches, noMatchFallbacks, historyLength);
+
+  // Handle Star deciding to unlock recommendations for the manual path
+  if (isManualPath && response.includes("[UNLOCK_RECS]")) {
+    response = response.replace(/\[UNLOCK_RECS\]/g, "").trim();
+    setImmediate(async () => {
+      try {
+        await storage.unlockRecommendations(userId);
+        await storage.completeOnboarding(userId);
+        console.log(`[Path3] Star unlocked recommendations for user=${userId} via chat`);
+      } catch (e) {
+        console.error("[Path3] Failed to unlock via chat:", e instanceof Error ? e.message : e);
+      }
+    });
+  }
 
   const implicitFeedback =
     signals.likedGenres.length > 0 ||

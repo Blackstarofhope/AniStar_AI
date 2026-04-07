@@ -744,6 +744,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ shown, hidden });
   });
 
+  // Path 3 — Manual library favoriting
+  app.post("/api/onboarding/path3/start", async (req: Request, res: Response) => {
+    const userId = extractUserId(req);
+    try {
+      await storage.setOnboardingPath(userId, "manual");
+      res.json({
+        success: true,
+        message: "Discover anime in your library. I'll let you know when I can see you clearly.",
+      });
+    } catch (e) {
+      console.error("[Path3] setOnboardingPath failed:", e instanceof Error ? e.message : e);
+      res.status(500).json({ error: "Failed to start path 3" });
+    }
+  });
+
   app.post("/api/onboarding/path1", async (req: Request, res: Response) => {
     const userId = extractUserId(req);
     const { favorites } = req.body as { favorites?: string };

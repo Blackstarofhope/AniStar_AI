@@ -670,7 +670,7 @@ export async function processFeedback(
   malId: number,
   rating: number,
   userId = "default"
-): Promise<{ epoch: number; goodness: number }> {
+): Promise<{ epoch: number; goodness: number; justUnlocked: boolean }> {
   const eng = await getEngine(userId);
   eng.isTraining = true;
 
@@ -757,7 +757,23 @@ export async function processFeedback(
 
     await persistEngine(userId, eng);
 
-    return { epoch: eng.network.epoch, goodness: avgGoodness };
+    let justUnlocked = false;
+    try {
+      const onboarding = await storage.getOnboardingState(userId);
+      if (onboarding?.pathChosen === "manual" && !onboarding.unlockedRecommendations) {
+        const ratings = await storage.getUserRatings(userId);
+        if (ratings.length >= 10) {
+          await storage.unlockRecommendations(userId);
+          await storage.completeOnboarding(userId);
+          justUnlocked = true;
+          console.log(`[Path3] Recommendations unlocked for user=${userId} after ${ratings.length} ratings`);
+        }
+      }
+    } catch (e) {
+      console.warn("[Path3] Onboarding check failed:", e instanceof Error ? e.message : e);
+    }
+
+    return { epoch: eng.network.epoch, goodness: avgGoodness, justUnlocked };
   } finally {
     eng.isTraining = false;
   }
