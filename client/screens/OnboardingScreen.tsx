@@ -130,7 +130,7 @@ export default function OnboardingScreen() {
               <ActivityIndicator color={Colors.dark.accent} size="small" />
             ) : (
               <ThemedText style={styles.greetingText}>
-                {greeting ?? "I've been waiting for someone like you. How shall we begin?"}
+                {greeting ?? "*Someone new.*\nBefore I can show you anything — what kind of fire burns in you?"}
               </ThemedText>
             )}
           </View>
