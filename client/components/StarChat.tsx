@@ -199,6 +199,8 @@ export function StarChat({ initialMessage }: StarChatProps) {
     }
   }, [input, isLoading, isAtCap, messages, scrollToBottom, userId, refreshUsage]);
 
+  console.log("StarChat tabBarHeight:", tabBarHeight);
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
