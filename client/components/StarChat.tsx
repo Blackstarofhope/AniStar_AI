@@ -249,6 +249,7 @@ export function StarChat({ initialMessage }: StarChatProps) {
           style={[
             styles.inputRow,
             Platform.OS === "ios" ? styles.inputRowIos : styles.inputRowAndroid,
+            { paddingBottom: tabBarHeight + (Platform.OS === "ios" ? Spacing.md : Spacing.lg) },
           ]}
         >
           <TextInput

@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import GemSlider from "@/components/GemSlider";
 import { useHeaderHeight } from "@react-navigation/elements";
+import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -536,6 +537,7 @@ function BanModal({
 export default function RecommendationsScreen() {
   const navigation = useNavigation<NavProp>();
   const headerHeight = useHeaderHeight();
+  const tabBarHeight = useBottomTabBarHeight();
   const queryClient = useQueryClient();
   const { userId, onboardingUnlocked, refreshOnboardingState } = useUser();
 
@@ -650,7 +652,7 @@ export default function RecommendationsScreen() {
     <KeyboardAvoidingView
       style={[styles.root, { paddingTop: headerHeight }]}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={headerHeight}
+      keyboardVerticalOffset={Platform.OS === "ios" ? tabBarHeight : 0}
     >
       <ScrollView
         style={styles.lanesScroll}
