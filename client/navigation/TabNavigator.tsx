@@ -11,6 +11,7 @@ import HomeScreen from "@/screens/HomeScreen";
 import AnimeDetailScreen from "@/screens/AnimeDetailScreen";
 import RecommendationsScreen from "@/screens/RecommendationsScreen";
 import LibraryScreen from "@/screens/LibraryScreen";
+import StarScreen from "@/screens/StarScreen";
 import type {
   ScheduleStackParamList,
   RecsStackParamList,
@@ -75,7 +76,7 @@ function RecommendationsNavigator() {
       <RecsStack.Screen
         name="Recommendations"
         component={RecommendationsScreen}
-        options={{ headerTitle: () => <HeaderTitle title="For You" /> }}
+        options={{ headerTitle: () => <HeaderTitle title="Recs" /> }}
       />
       <RecsStack.Screen
         name="AnimeDetail"
@@ -126,10 +127,19 @@ export default function TabNavigator() {
               />
             );
           }
-          if (route.name === "ForYou") {
+          if (route.name === "Recs") {
             return (
               <Ionicons
                 name={focused ? "sparkles" : "sparkles-outline"}
+                size={size}
+                color={color}
+              />
+            );
+          }
+          if (route.name === "Star") {
+            return (
+              <Ionicons
+                name={focused ? "star" : "star-outline"}
                 size={size}
                 color={color}
               />
@@ -150,9 +160,14 @@ export default function TabNavigator() {
         options={{ tabBarLabel: "Library" }}
       />
       <Tab.Screen
-        name="ForYou"
+        name="Recs"
         component={RecommendationsNavigator}
-        options={{ tabBarLabel: "For You" }}
+        options={{ tabBarLabel: "Recs" }}
+      />
+      <Tab.Screen
+        name="Star"
+        component={StarScreen}
+        options={{ tabBarLabel: "Star" }}
       />
     </Tab.Navigator>
   );

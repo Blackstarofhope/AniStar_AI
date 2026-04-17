@@ -23,7 +23,6 @@ import { LinearGradient } from "expo-linear-gradient";
 
 import { ThemedText } from "@/components/ThemedText";
 import { AIStatusModal } from "@/components/AIStatusModal";
-import { StarChat } from "@/components/StarChat";
 import { Colors, Spacing, BorderRadius } from "@/constants/theme";
 import { getApiUrl } from "@/lib/query-client";
 import { useUser } from "@/contexts/UserContext";
@@ -649,13 +648,10 @@ export default function RecommendationsScreen() {
   }
 
   return (
-    <KeyboardAvoidingView
-      style={[styles.root, { paddingTop: headerHeight }]}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={Platform.OS === "ios" ? tabBarHeight : 0}
-    >
+    <View style={[styles.root, { paddingTop: headerHeight }]}>
       <ScrollView
         style={styles.lanesScroll}
+        contentContainerStyle={{ paddingBottom: tabBarHeight + Spacing.xl }}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -744,10 +740,7 @@ export default function RecommendationsScreen() {
           onCardPress={handleCardPress}
         />
 
-        <View style={{ height: Spacing.xl }} />
       </ScrollView>
-
-      <StarChat />
 
       <AIStatusModal visible={statusVisible} onClose={() => setStatusVisible(false)} />
 
@@ -760,7 +753,7 @@ export default function RecommendationsScreen() {
         }}
         allAnime={allAnime}
       />
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
