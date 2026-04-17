@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import {
   View,
   StyleSheet,
@@ -540,14 +540,10 @@ export default function RecommendationsScreen() {
   const queryClient = useQueryClient();
   const { userId, onboardingUnlocked, refreshOnboardingState } = useUser();
 
-  const focusRefRef = useRef(0);
   useFocusEffect(
     useCallback(() => {
       // Refresh onboarding state on every tab focus so gating/unlocking is always current
-      if (focusRefRef.current > 0) {
-        refreshOnboardingState();
-      }
-      focusRefRef.current += 1;
+      refreshOnboardingState();
     }, [refreshOnboardingState])
   );
 
@@ -643,6 +639,18 @@ export default function RecommendationsScreen() {
             Explore the Library
           </ThemedText>
         </Pressable>
+        <ThemedText
+          style={{
+            marginTop: 24,
+            fontSize: 11,
+            opacity: 0.4,
+            color: Colors.dark.textSecondary,
+            fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+            letterSpacing: 0.5,
+          }}
+        >
+          User ID: {userId.slice(0, 8)}...
+        </ThemedText>
       </View>
     );
   }

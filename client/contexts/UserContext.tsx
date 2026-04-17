@@ -83,7 +83,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
         const storedName = await AsyncStorage.getItem(DISPLAY_NAME_KEY);
         setDisplayName(storedName ?? null);
 
-        if (storedName) {
+        if (storedId) {
           setIsCheckingOnboarding(true);
           try {
             const baseUrl = getApiUrl();
