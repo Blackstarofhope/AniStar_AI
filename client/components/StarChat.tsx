@@ -17,6 +17,7 @@ import Animated, {
   cancelAnimation,
 } from "react-native-reanimated";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
+import { useFocusEffect } from "@react-navigation/native";
 import { ThemedText } from "@/components/ThemedText";
 import { Colors, Spacing, BorderRadius } from "@/constants/theme";
 import { getApiUrl } from "@/lib/query-client";
@@ -150,6 +151,19 @@ export function StarChat({ initialMessage }: StarChatProps) {
   useEffect(() => {
     refreshUsage();
   }, [refreshUsage]);
+
+  // Refresh chat usage on every focus + poll every 60s while focused.
+  // Prevents the stale-state deadlock where an at-cap reading from a previous
+  // day blocks the user from sending — and therefore from ever refreshing.
+  useFocusEffect(
+    useCallback(() => {
+      refreshUsage();
+      const intervalId = setInterval(() => {
+        refreshUsage();
+      }, 60_000);
+      return () => clearInterval(intervalId);
+    }, [refreshUsage])
+  );
 
   const scrollToBottom = useCallback(() => {
     setTimeout(() => {
