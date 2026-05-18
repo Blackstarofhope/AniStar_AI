@@ -1,15 +1,4 @@
-import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, real, serial, timestamp, jsonb, unique, primaryKey, boolean } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod";
-
-export const users = pgTable("users", {
-  id: varchar("id")
-    .primaryKey()
-    .default(sql`gen_random_uuid()`),
-  username: text("username").notNull().unique(),
-  password: text("password").notNull(),
-});
+import { pgTable, text, integer, real, serial, timestamp, jsonb, unique, primaryKey, boolean } from "drizzle-orm/pg-core";
 
 export const userEngineState = pgTable("user_engine_state", {
   userId: text("user_id").primaryKey(),
@@ -120,11 +109,3 @@ export const animeReasons = pgTable("anime_reasons", {
 }, (t) => ({
   pk: primaryKey({ columns: [t.userId, t.malId] }),
 }));
-
-export const insertUserSchema = createInsertSchema(users).pick({
-  username: true,
-  password: true,
-});
-
-export type InsertUser = z.infer<typeof insertUserSchema>;
-export type User = typeof users.$inferSelect;

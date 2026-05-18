@@ -2,11 +2,10 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import {
-  users, userEngineState, animeSearched, vibeProfiles,
+  userEngineState, animeSearched, vibeProfiles,
   userRatings, animeDiscovery, userProfiles,
   userBanList, userWatchState, userPreferences, userChatUsage,
   userOnboarding, userCharacterRatings, animeReasons,
-  type InsertUser, type User,
 } from "@shared/schema";
 
 if (!process.env.DATABASE_URL) {
@@ -37,10 +36,6 @@ export async function testConnection(): Promise<void> {
 }
 
 export interface IStorage {
-  getUser(id: string): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>;
-
   saveEngineState(userId: string, json: object): Promise<void>;
   loadEngineState(userId: string): Promise<object | null>;
 
@@ -108,24 +103,6 @@ class PostgresStorage implements IStorage {
       }
     }
     throw new Error("unreachable");
-  }
-
-  async getUser(id: string): Promise<User | undefined> {
-    return this.withRetry(() =>
-      db.select().from(users).where(eq(users.id, id)).then((rows) => rows[0])
-    );
-  }
-
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    return this.withRetry(() =>
-      db.select().from(users).where(eq(users.username, username)).then((rows) => rows[0])
-    );
-  }
-
-  async createUser(insertUser: InsertUser): Promise<User> {
-    return this.withRetry(() =>
-      db.insert(users).values(insertUser).returning().then((rows) => rows[0])
-    );
   }
 
   async saveEngineState(userId: string, json: object): Promise<void> {
