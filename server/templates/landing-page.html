@@ -1,9 +1,14 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
-    <title>APP_NAME_PLACEHOLDER</title>
+    <title>APP_NAME_PLACEHOLDER — AI Anime Countdown &amp; Discovery</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="AniStar is an AI-powered anime countdown and discovery app. Track seasonal releases, get personalised recommendations, and never miss a new episode." />
+    <meta property="og:title" content="AniStar — AI Anime Countdown &amp; Discovery" />
+    <meta property="og:description" content="Track seasonal anime releases with real-time countdowns and AI-powered recommendations built for anime fans." />
+    <meta property="og:type" content="website" />
+    <meta name="theme-color" content="#0F0F12" />
     <style>
       body {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -150,63 +155,48 @@
       </div>
     </div>
 
-    <script src="https://unpkg.com/qr-code-styling@1.6.0/lib/qr-code-styling.js"></script>
+    <script async src="https://unpkg.com/qr-code-styling@1.6.0/lib/qr-code-styling.js" onload="initPage()"></script>
     <script>
       (function () {
         const ua = navigator.userAgent;
-        const loadingEl = document.getElementById("loading");
-        const contentEl = document.getElementById("content");
-
         const isAndroid = /Android/i.test(ua);
-
         const isIOS =
           /iPhone|iPad|iPod/i.test(ua) ||
           (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-
         const deepLink = "exps://EXPS_URL_PLACEHOLDER";
 
-        const qrCode = new QRCodeStyling({
-          width: 500,
-          height: 500,
-          data: deepLink,
-          image: "assets/images/icon.png",
-          dotsOptions: {
-            color: "#000000",
-            type: "rounded",
-          },
-          backgroundOptions: {
-            color: "#ffffff",
-          },
-          imageOptions: {
-            crossOrigin: "anonymous",
-            margin: 8,
-            imageSize: 0.4,
-            borderRadius: 8,
-          },
-          cornersSquareOptions: {
-            type: "extra-rounded",
-          },
-          cornersDotOptions: {
-            type: "dot",
-          },
-          qrOptions: {
-            errorCorrectionLevel: "H",
-          },
-        });
-
-        qrCode.append(document.getElementById("qr-code"));
-
         if (isAndroid || isIOS) {
+          const loadingEl = document.getElementById("loading");
+          const contentEl = document.getElementById("content");
           loadingEl.style.display = "block";
           contentEl.style.display = "none";
-
           window.location.href = deepLink;
-
           setTimeout(function () {
             loadingEl.style.display = "none";
             contentEl.style.display = "block";
           }, 500);
         }
+
+        window.initPage = function () {
+          const qrCode = new QRCodeStyling({
+            width: 500,
+            height: 500,
+            data: deepLink,
+            image: "assets/images/icon.png",
+            dotsOptions: { color: "#000000", type: "rounded" },
+            backgroundOptions: { color: "#ffffff" },
+            imageOptions: {
+              crossOrigin: "anonymous",
+              margin: 8,
+              imageSize: 0.4,
+              borderRadius: 8,
+            },
+            cornersSquareOptions: { type: "extra-rounded" },
+            cornersDotOptions: { type: "dot" },
+            qrOptions: { errorCorrectionLevel: "H" },
+          });
+          qrCode.append(document.getElementById("qr-code"));
+        };
       })();
     </script>
   </body>
