@@ -1,5 +1,6 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
+import { randomUUID } from "crypto";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   userEngineState, animeSearched, vibeProfiles,
@@ -56,6 +57,10 @@ export interface IStorage {
   getDisplayName(userId: string): Promise<string | null>;
   isDisplayNameTaken(displayName: string, excludeUserId: string): Promise<boolean>;
   loginWithDisplayName(displayName: string, pin: string): Promise<string | null>;
+
+  registerUser(displayName: string, normalizedName: string, hashedPin: string): Promise<{ userId: string; displayName: string }>;
+  getUserProfileByNormalized(normalized: string): Promise<{ userId: string; displayName: string; pin: string | null } | null>;
+  updatePin(userId: string, hashedPin: string): Promise<void>;
 
   addBan(userId: string, ban: { malId?: number; bannedGenre?: string; bannedTrope?: string; reason?: string }): Promise<void>;
   removeBan(userId: string, banId: number): Promise<void>;
@@ -279,6 +284,47 @@ class PostgresStorage implements IStorage {
           const match = rows.find((r) => r.pin === pin);
           return match?.userId ?? null;
         })
+    );
+  }
+
+  async registerUser(
+    displayName: string,
+    normalizedName: string,
+    hashedPin: string
+  ): Promise<{ userId: string; displayName: string }> {
+    const userId = randomUUID();
+    await this.withRetry(() =>
+      db
+        .insert(userProfiles)
+        .values({ userId, displayName, displayNameNormalized: normalizedName, pin: hashedPin })
+        .then(() => undefined)
+    );
+    return { userId, displayName };
+  }
+
+  async getUserProfileByNormalized(
+    normalized: string
+  ): Promise<{ userId: string; displayName: string; pin: string | null } | null> {
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(userProfiles)
+        .where(eq(userProfiles.displayNameNormalized, normalized))
+        .then((rows) =>
+          rows[0]
+            ? { userId: rows[0].userId, displayName: rows[0].displayName, pin: rows[0].pin ?? null }
+            : null
+        )
+    );
+  }
+
+  async updatePin(userId: string, hashedPin: string): Promise<void> {
+    return this.withRetry(() =>
+      db
+        .update(userProfiles)
+        .set({ pin: hashedPin })
+        .where(eq(userProfiles.userId, userId))
+        .then(() => undefined)
     );
   }
 

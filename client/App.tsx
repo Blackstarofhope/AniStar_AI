@@ -13,19 +13,19 @@ import RootStackNavigator from "@/navigation/RootStackNavigator";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { FavoritesProvider } from "@/contexts/FavoritesContext";
 import { UserProvider, useUser } from "@/contexts/UserContext";
-import ProfileSetupScreen from "@/screens/ProfileSetupScreen";
+import AuthScreen from "@/screens/AuthScreen";
 import OnboardingScreen from "@/screens/OnboardingScreen";
 import { Colors } from "@/constants/theme";
 
 function AppContent() {
-  const { displayName, isLoading, onboardingPath, isCheckingOnboarding } = useUser();
+  const { userId, isLoading, onboardingPath, isCheckingOnboarding } = useUser();
 
   if (isLoading || isCheckingOnboarding) {
     return <View style={styles.root} />;
   }
 
-  if (displayName === null) {
-    return <ProfileSetupScreen />;
+  if (userId === null) {
+    return <AuthScreen />;
   }
 
   if (onboardingPath === null) {

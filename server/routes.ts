@@ -1,6 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "node:http";
 import * as https from "https";
+import bcrypt from "bcryptjs";
 import { storage, testConnection } from "./storage.js";
 import {
   getRecommendations, getThreeLaneRecommendations, processFeedback, getAIStatus, verifyAnimeArtwork,
@@ -156,6 +157,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     "/api/ai/rest-train",
     "/api/user/displayname",
     "/api/user/login",
+    "/api/auth/register",
+    "/api/auth/login",
   ]);
   app.use((req: Request, res: Response, next: NextFunction) => {
     if (!req.path.startsWith("/api/")) return next();
@@ -482,6 +485,107 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (e) {
       console.error("[User] login error:", e);
       res.status(500).json({ error: "Login failed" });
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Auth routes — /api/auth/register and /api/auth/login
+  // These do not require a userId header/query param (exempt from the guard).
+  // ---------------------------------------------------------------------------
+
+  // Rate limiter: max 5 failed login attempts per normalized name in 15 minutes.
+  const loginFailures = new Map<string, { count: number; windowStart: number }>();
+  const RATE_WINDOW_MS = 15 * 60 * 1000;
+  const RATE_MAX_FAILURES = 5;
+
+  function checkRateLimit(normalized: string): boolean {
+    const now = Date.now();
+    const entry = loginFailures.get(normalized);
+    if (!entry) return false;
+    if (now - entry.windowStart > RATE_WINDOW_MS) {
+      loginFailures.delete(normalized);
+      return false;
+    }
+    return entry.count >= RATE_MAX_FAILURES;
+  }
+
+  function recordFailure(normalized: string): void {
+    const now = Date.now();
+    const entry = loginFailures.get(normalized);
+    if (!entry || now - entry.windowStart > RATE_WINDOW_MS) {
+      loginFailures.set(normalized, { count: 1, windowStart: now });
+    } else {
+      entry.count++;
+    }
+  }
+
+  function resetFailures(normalized: string): void {
+    loginFailures.delete(normalized);
+  }
+
+  app.post("/api/auth/register", async (req: Request, res: Response) => {
+    const { displayName, pin } = req.body as { displayName?: string; pin?: string };
+    if (typeof displayName !== "string" || displayName.trim().length < 2) {
+      return res.status(400).json({ error: "displayName must be at least 2 characters" });
+    }
+    if (displayName.trim().length > 32) {
+      return res.status(400).json({ error: "displayName must be 32 characters or fewer" });
+    }
+    if (typeof pin !== "string" || !/^\d{4}$/.test(pin)) {
+      return res.status(400).json({ error: "PIN must be exactly 4 digits" });
+    }
+    try {
+      const normalized = displayName.trim().toLowerCase();
+      const hashedPin = await bcrypt.hash(pin, 10);
+      const result = await storage.registerUser(displayName.trim(), normalized, hashedPin);
+      return res.status(201).json(result);
+    } catch (e: any) {
+      if (e?.code === "23505" || e?.message?.includes("unique")) {
+        return res.status(409).json({ error: "Display name is already taken" });
+      }
+      console.error("[Auth] register error:", e);
+      return res.status(500).json({ error: "Registration failed" });
+    }
+  });
+
+  app.post("/api/auth/login", async (req: Request, res: Response) => {
+    const { displayName, pin } = req.body as { displayName?: string; pin?: string };
+    if (typeof displayName !== "string" || displayName.trim().length === 0) {
+      return res.status(400).json({ error: "displayName is required" });
+    }
+    if (typeof pin !== "string" || !/^\d{4}$/.test(pin)) {
+      return res.status(400).json({ error: "PIN must be exactly 4 digits" });
+    }
+    const normalized = displayName.trim().toLowerCase();
+    if (checkRateLimit(normalized)) {
+      return res.status(429).json({ error: "Too many failed attempts. Try again in 15 minutes." });
+    }
+    try {
+      const profile = await storage.getUserProfileByNormalized(normalized);
+      if (!profile) {
+        recordFailure(normalized);
+        return res.status(401).json({ error: "Invalid display name or PIN" });
+      }
+      let pinOk = false;
+      if (profile.pin && (profile.pin.startsWith("$2b$") || profile.pin.startsWith("$2a$"))) {
+        pinOk = await bcrypt.compare(pin, profile.pin);
+      } else if (profile.pin) {
+        // Legacy plaintext PIN — compare directly then migrate to bcrypt
+        pinOk = profile.pin === pin;
+        if (pinOk) {
+          const newHash = await bcrypt.hash(pin, 10);
+          await storage.updatePin(profile.userId, newHash).catch(() => {});
+        }
+      }
+      if (!pinOk) {
+        recordFailure(normalized);
+        return res.status(401).json({ error: "Invalid display name or PIN" });
+      }
+      resetFailures(normalized);
+      return res.json({ userId: profile.userId, displayName: profile.displayName });
+    } catch (e) {
+      console.error("[Auth] login error:", e);
+      return res.status(500).json({ error: "Login failed" });
     }
   });
 

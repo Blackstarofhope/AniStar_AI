@@ -1,0 +1,23 @@
+Implement the account identity rework. Goal: no more silently generated ghost UUIDs. Every user is either signed in to a real account or is shown an auth screen. UUID stays the internal primary key everywhere; display name becomes the unique login identifier.
+
+PART 1 — Database (drizzle schema + push):
+- Add a unique index on a normalized display name. Add a column display_name_normalized to user_profiles (lowercase, trimmed), backfill it from existing display_name values, and add a UNIQUE constraint on it.
+- Do not modify primary keys or any other tables.
+
+PART 2 — Server:
+- POST /api/auth/register: accepts displayName + pin. Normalizes displayName (trim, lowercase for the normalized column). Rejects with 409 if normalized name is taken. Creates the user with a server-generated UUID, stores the PIN hashed with bcrypt (never plaintext), returns { userId, displayName }.
+- POST /api/auth/login: accepts displayName + pin. Looks up by normalized name, verifies the bcrypt hash, returns { userId, displayName } on success, 401 on failure.
+- Add basic rate limiting on login: after 5 failed attempts for a display name within 15 minutes, return 429 until the window expires. In-memory is fine for now.
+- If existing users have plaintext PINs stored, migrate: on first successful login compare plaintext, then rehash with bcrypt and overwrite.
+
+PART 3 — Client:
+- Remove the generateUUID() fallback in UserContext entirely. If AsyncStorage has no userId, the app shows an Auth screen (create account / sign in) instead of the main tabs. No API calls fire until authenticated.
+- Auth screen: two modes, Create Account (display name + PIN + confirm PIN) and Sign In (display name + PIN). On success, store userId + displayName in AsyncStorage and proceed to the app.
+- Keep the existing onboarding flow exactly as is — it begins AFTER authentication, unchanged.
+- Style the auth screen using the existing dark/cyberpunk theme tokens already in the app. Keep it minimal.
+
+PART 4 — Constraints:
+- Do not touch the Star prompt, recommendation engine, chat cap logic, or tab navigation.
+- Do not delete or modify any existing rows except the display_name_normalized backfill.
+- Run drizzle-kit push against the DEV database only. Do not touch neondb yet — prod migration is a separate step we'll do deliberately.
+- When done: list every file changed, show the schema diff, and confirm the app boots to the Auth screen when AsyncStorage is empty.

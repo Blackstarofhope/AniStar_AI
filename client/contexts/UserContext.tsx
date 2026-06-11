@@ -6,14 +6,6 @@ import { setCurrentUserId } from "@/lib/userState";
 const USER_ID_KEY = "@anistar/userId";
 const DISPLAY_NAME_KEY = "@anistar/displayName";
 
-function generateUUID(): string {
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === "x" ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-}
-
 interface OnboardingState {
   pathChosen: string | null;
   completed: boolean;
@@ -28,8 +20,9 @@ interface UserContextValue {
   onboardingUnlocked: boolean;
   isCheckingOnboarding: boolean;
   preferredStartTab: string;
-  saveDisplayName: (name: string, pin: string) => Promise<void>;
+  register: (displayName: string, pin: string) => Promise<void>;
   login: (displayName: string, pin: string) => Promise<boolean>;
+  saveDisplayName: (name: string, pin: string) => Promise<void>;
   setOnboardingPath: (path: string) => void;
   markOnboardingUnlocked: () => void;
   setPreferredStartTab: (tab: string) => void;
@@ -44,8 +37,9 @@ const UserContext = createContext<UserContextValue>({
   onboardingUnlocked: false,
   isCheckingOnboarding: false,
   preferredStartTab: "Schedule",
-  saveDisplayName: async () => {},
+  register: async () => {},
   login: async () => false,
+  saveDisplayName: async () => {},
   setOnboardingPath: () => {},
   markOnboardingUnlocked: () => {},
   setPreferredStartTab: () => {},
@@ -57,6 +51,30 @@ async function fetchOnboardingStateFromServer(userId: string, baseUrl: string): 
   const res = await fetch(url.toString());
   if (!res.ok) throw new Error("Failed to fetch onboarding state");
   return res.json() as Promise<OnboardingState>;
+}
+
+async function applySession(
+  userId: string,
+  displayName: string,
+  setUserId: (id: string) => void,
+  setDisplayName: (name: string) => void,
+  setOnboardingPathState: (path: string | null) => void,
+  setOnboardingUnlocked: (val: boolean) => void,
+  baseUrl: string
+): Promise<void> {
+  await AsyncStorage.setItem(USER_ID_KEY, userId);
+  await AsyncStorage.setItem(DISPLAY_NAME_KEY, displayName);
+  setUserId(userId);
+  setCurrentUserId(userId);
+  setDisplayName(displayName);
+  try {
+    const state = await fetchOnboardingStateFromServer(userId, baseUrl);
+    setOnboardingPathState(state.pathChosen ?? null);
+    setOnboardingUnlocked(state.unlockedRecommendations ?? false);
+  } catch {
+    setOnboardingPathState(null);
+    setOnboardingUnlocked(false);
+  }
 }
 
 export function UserProvider({ children }: { children: React.ReactNode }) {
@@ -72,10 +90,10 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     async function init() {
       try {
-        let storedId = await AsyncStorage.getItem(USER_ID_KEY);
+        const storedId = await AsyncStorage.getItem(USER_ID_KEY);
         if (!storedId) {
-          storedId = generateUUID();
-          await AsyncStorage.setItem(USER_ID_KEY, storedId);
+          // No authenticated session — app will show AuthScreen
+          return;
         }
         setUserId(storedId);
         setCurrentUserId(storedId);
@@ -83,27 +101,62 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
         const storedName = await AsyncStorage.getItem(DISPLAY_NAME_KEY);
         setDisplayName(storedName ?? null);
 
-        if (storedId) {
-          setIsCheckingOnboarding(true);
-          try {
-            const baseUrl = getApiUrl();
-            const state = await fetchOnboardingStateFromServer(storedId, baseUrl);
-            setOnboardingPathState(state.pathChosen ?? null);
-            setOnboardingUnlocked(state.unlockedRecommendations ?? false);
-          } catch {
-          } finally {
-            setIsCheckingOnboarding(false);
-          }
+        setIsCheckingOnboarding(true);
+        try {
+          const baseUrl = getApiUrl();
+          const state = await fetchOnboardingStateFromServer(storedId, baseUrl);
+          setOnboardingPathState(state.pathChosen ?? null);
+          setOnboardingUnlocked(state.unlockedRecommendations ?? false);
+        } catch {
+        } finally {
+          setIsCheckingOnboarding(false);
         }
       } catch {
-        const fallbackId = generateUUID();
-        setUserId(fallbackId);
-        setCurrentUserId(fallbackId);
+        // Storage read failed — leave userId null, show AuthScreen
       } finally {
         setIsLoading(false);
       }
     }
     init();
+  }, []);
+
+  const register = useCallback(async (name: string, pin: string): Promise<void> => {
+    const baseUrl = getApiUrl();
+    const url = new URL("/api/auth/register", baseUrl);
+    const res = await fetch(url.toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: name.trim(), pin }),
+    });
+    if (res.status === 409) throw new Error("taken");
+    if (!res.ok) throw new Error("register_failed");
+    const { userId: returnedId, displayName: returnedName } = await res.json() as { userId: string; displayName: string };
+    await applySession(
+      returnedId, returnedName,
+      setUserId, setDisplayName,
+      setOnboardingPathState, setOnboardingUnlocked,
+      baseUrl
+    );
+  }, []);
+
+  const login = useCallback(async (name: string, pin: string): Promise<boolean> => {
+    const baseUrl = getApiUrl();
+    const url = new URL("/api/auth/login", baseUrl);
+    const res = await fetch(url.toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: name.trim(), pin }),
+    });
+    if (res.status === 429) throw new Error("rate_limited");
+    if (!res.ok) return false;
+    const { userId: returnedId, displayName: returnedName } = await res.json() as { userId: string; displayName: string };
+    await applySession(
+      returnedId, returnedName,
+      setUserId, setDisplayName,
+      setOnboardingPathState, setOnboardingUnlocked,
+      baseUrl
+    );
+    return true;
   }, []);
 
   const saveDisplayName = useCallback(async (name: string, pin: string) => {
@@ -121,34 +174,6 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     setOnboardingPathState(null);
     setOnboardingUnlocked(false);
   }, [userId]);
-
-  const login = useCallback(async (name: string, pin: string): Promise<boolean> => {
-    const url = new URL("/api/user/login", getApiUrl());
-    const res = await fetch(url.toString(), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ displayName: name.trim(), pin }),
-    });
-    if (!res.ok) return false;
-    const { userId: returnedId } = await res.json() as { userId: string };
-    await AsyncStorage.setItem(USER_ID_KEY, returnedId);
-    await AsyncStorage.setItem(DISPLAY_NAME_KEY, name.trim());
-    setUserId(returnedId);
-    setCurrentUserId(returnedId);
-    setDisplayName(name.trim());
-
-    try {
-      const baseUrl = getApiUrl();
-      const state = await fetchOnboardingStateFromServer(returnedId, baseUrl);
-      setOnboardingPathState(state.pathChosen ?? null);
-      setOnboardingUnlocked(state.unlockedRecommendations ?? false);
-    } catch {
-      setOnboardingPathState(null);
-      setOnboardingUnlocked(false);
-    }
-
-    return true;
-  }, []);
 
   const setOnboardingPath = useCallback((path: string) => {
     setOnboardingPathState(path);
@@ -182,8 +207,9 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
         onboardingUnlocked,
         isCheckingOnboarding,
         preferredStartTab,
-        saveDisplayName,
+        register,
         login,
+        saveDisplayName,
         setOnboardingPath,
         markOnboardingUnlocked,
         setPreferredStartTab,

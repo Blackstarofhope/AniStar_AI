@@ -38,10 +38,12 @@ export const animeDiscovery = pgTable("anime_discovery", {
 export const userProfiles = pgTable("user_profiles", {
   userId: text("user_id").primaryKey(),
   displayName: text("display_name").notNull(),
+  displayNameNormalized: text("display_name_normalized"),
   pin: text("pin"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
   displayNameUnique: unique("user_profiles_display_name_unique").on(t.displayName),
+  displayNameNormalizedUnique: unique("user_profiles_display_name_normalized_unique").on(t.displayNameNormalized),
 }));
 
 export const userBanList = pgTable("user_ban_list", {
