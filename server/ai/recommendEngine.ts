@@ -337,7 +337,7 @@ function applyHardFilters(
 }
 
 async function scoreAnimeList(
-  eng: ReturnType<typeof getEngine>,
+  eng: Awaited<ReturnType<typeof getEngine>>,
   animeList: AnimeScheduleItem[],
   userPref: number[],
   limit: number,
