@@ -201,50 +201,6 @@ function configureExpoAndLanding(app: express.Application) {
   log("Expo routing: Checking expo-platform header on / and /manifest");
 }
 
-// ─── TEMPORARY DIAGNOSTIC — remove before App Store submission ───────────────
-function setupDiagnostics(app: express.Application) {
-  const dbUrlHost = (() => {
-    try { return new URL(process.env.DATABASE_URL ?? "").host; }
-    catch { return process.env.DATABASE_URL ?? "(unset)"; }
-  })();
-
-  // Log on every /api hit: Host header + which DB host this server is wired to
-  app.use((req: Request, _res: Response, next: NextFunction) => {
-    if (req.path.startsWith("/api")) {
-      log(`[DIAG] ${req.method} ${req.path} | Host:${req.get("host")} | X-Forwarded-Host:${req.get("x-forwarded-host") ?? "-"} | DB-host:${dbUrlHost}`);
-    }
-    next();
-  });
-
-  // Dedicated probe: GET /api/_diag — returns DB identity as JSON and logs it
-  app.get("/api/_diag", async (_req: Request, res: Response) => {
-    try {
-      const rows = await db.execute(sql`
-        SELECT inet_server_addr()::text   AS server_addr,
-               inet_server_port()         AS server_port,
-               current_database()         AS db_name,
-               current_user               AS db_user,
-               version()                  AS pg_version
-      `);
-      const row = rows.rows[0] ?? {};
-      const payload = {
-        DATABASE_URL_host: dbUrlHost,
-        db_server_addr:    row.server_addr,
-        db_server_port:    row.server_port,
-        db_name:           row.db_name,
-        db_user:           row.db_user,
-        pg_version:        String(row.pg_version ?? "").slice(0, 60),
-      };
-      log(`[DIAG] /api/_diag result: ${JSON.stringify(payload)}`);
-      res.json(payload);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      log(`[DIAG] /api/_diag error: ${msg}`);
-      res.status(500).json({ error: msg });
-    }
-  });
-}
-// ─────────────────────────────────────────────────────────────────────────────
 
 function setupErrorHandler(app: express.Application) {
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
@@ -298,7 +254,6 @@ async function backfillExistingUsers(): Promise<void> {
   setupCors(app);
   setupBodyParsing(app);
   setupRequestLogging(app);
-  setupDiagnostics(app);
 
   app.get("/privacy", (_req: Request, res: Response) => {
     res.sendFile(path.resolve(process.cwd(), "privacy-policy.html"));
