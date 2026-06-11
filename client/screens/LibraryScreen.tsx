@@ -68,7 +68,7 @@ function LibraryCard({
 }: {
   anime: LibraryAnime;
   cardWidth: number;
-  userId: string;
+  userId: string | null;
   onPress: () => void;
   onUnlocked?: () => void;
 }) {
@@ -329,6 +329,7 @@ export default function LibraryScreen() {
     items: LibraryAnime[];
   }>({
     queryKey: ["/api/anime/library", source, userId],
+    enabled: !!userId,
     queryFn: async () => {
       const res = await apiRequest("GET", `/api/anime/library?source=${source}`);
       return res.json() as Promise<{ items: LibraryAnime[] }>;

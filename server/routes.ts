@@ -1,4 +1,4 @@
-import type { Express, Request, Response } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "node:http";
 import * as https from "https";
 import { storage, testConnection } from "./storage.js";
@@ -145,6 +145,34 @@ async function processPath1Favorites(userId: string, favoritesText: string): Pro
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Guard: reject "default" or missing userId on all user-specific routes.
+  // Routes that serve public/shared data, handle auth, or legitimately use
+  // "default" (rest-train background job calls the TS function directly —
+  // not via HTTP — so guarding the HTTP route here is safe).
+  const USER_ID_EXEMPT = new Set([
+    "/api/ai/star",
+    "/api/ai/verify-artwork",
+    "/api/ai/chat/feedback",
+    "/api/ai/rest-train",
+    "/api/user/displayname",
+    "/api/user/login",
+  ]);
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (!req.path.startsWith("/api/")) return next();
+    if (USER_ID_EXEMPT.has(req.path)) return next();
+    // Public anime data routes — no user identity required
+    if (/^\/api\/anime(\/|$)/.test(req.path)) return next();
+    const raw =
+      (req.query.userId as string | undefined) ||
+      (req.headers["x-user-id"] as string | undefined) ||
+      "";
+    const userId = raw.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64);
+    if (!userId || userId === "default") {
+      return res.status(400).json({ error: "Valid userId is required" });
+    }
+    next();
+  });
+
   app.get("/api/anime/schedule", async (req: Request, res: Response) => {
     const day = (req.query.day as string) || "monday";
     try {

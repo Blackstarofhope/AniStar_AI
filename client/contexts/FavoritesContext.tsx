@@ -25,6 +25,7 @@ const FavoritesContext = createContext<FavoritesContextValue | undefined>(undefi
 
 function sendFeedback(malId: number, rating: number): void {
   const userId = getCurrentUserId();
+  if (!userId) return;
   const url = new URL("/api/ai/feedback", getApiUrl());
   fetch(url.toString(), {
     method: "POST",

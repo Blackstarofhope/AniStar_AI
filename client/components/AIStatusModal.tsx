@@ -193,9 +193,9 @@ export function AIStatusModal({ visible, onClose }: AIStatusModalProps) {
 
   const { data: status, isLoading, isError, refetch } = useQuery<AIStatus>({
     queryKey: ["/api/ai/status", userId],
-    queryFn: () => fetchAIStatus(userId),
+    queryFn: () => fetchAIStatus(userId!),
     refetchInterval: visible ? 5000 : false,
-    enabled: visible,
+    enabled: visible && !!userId,
   });
 
   return (

@@ -143,6 +143,7 @@ export function StarChat({ initialMessage }: StarChatProps) {
   const scrollRef = useRef<ScrollView>(null);
 
   const refreshUsage = useCallback(() => {
+    if (!userId) return;
     fetchChatUsage(userId)
       .then(setChatUsage)
       .catch(() => {});
@@ -175,7 +176,7 @@ export function StarChat({ initialMessage }: StarChatProps) {
 
   const sendMessage = useCallback(async () => {
     const text = input.trim();
-    if (!text || isLoading || isAtCap) return;
+    if (!text || isLoading || isAtCap || !userId) return;
     setInput("");
 
     const userMsg: Message = {
@@ -192,7 +193,7 @@ export function StarChat({ initialMessage }: StarChatProps) {
       .map((m) => ({ role: m.role, content: m.content }));
 
     try {
-      const data = await postChat(text, historyForApi, userId);
+      const data = await postChat(text, historyForApi, userId!);
       setMessages((prev) => [
         ...prev,
         { id: `s-${Date.now()}`, role: "star", content: data.response },

@@ -553,15 +553,17 @@ export default function RecommendationsScreen() {
 
   const { data: lanes, isLoading, isError, refetch, isFetching } = useQuery<ThreeLaneRecommendations>({
     queryKey: ["/api/ai/recommend/lanes", userId],
-    queryFn: () => fetchLanes(userId),
+    queryFn: () => fetchLanes(userId!),
     staleTime: 2 * 60 * 1000,
     retry: 2,
+    enabled: !!userId,
   });
 
   const { data: preferences } = useQuery<{ hiddenGemBias: number }>({
     queryKey: ["/api/user/preferences", userId],
-    queryFn: () => fetchPreferences(userId),
+    queryFn: () => fetchPreferences(userId!),
     staleTime: 5 * 60 * 1000,
+    enabled: !!userId,
   });
 
   useEffect(() => {
@@ -574,7 +576,7 @@ export default function RecommendationsScreen() {
     async (value: number) => {
       setSliderValue(value);
       try {
-        await postPreferences(userId, value);
+        await postPreferences(userId!, value);
         queryClient.invalidateQueries({ queryKey: ["/api/ai/recommend/lanes", userId] });
       } catch {
         /* silent */
@@ -649,7 +651,7 @@ export default function RecommendationsScreen() {
             letterSpacing: 0.5,
           }}
         >
-          User ID: {userId.slice(0, 8)}...
+          User ID: {userId?.slice(0, 8) ?? ""}...
         </ThemedText>
       </View>
     );
@@ -720,7 +722,7 @@ export default function RecommendationsScreen() {
           data={lanes?.safe || []}
           isLoading={isLoading}
           accent={Colors.dark.accent}
-          userId={userId}
+          userId={userId!}
           onCardPress={handleCardPress}
         />
 
@@ -732,7 +734,7 @@ export default function RecommendationsScreen() {
           data={lanes?.stretch || []}
           isLoading={isLoading}
           accent={Colors.dark.accentSecondary}
-          userId={userId}
+          userId={userId!}
           onCardPress={handleCardPress}
         />
 
@@ -744,7 +746,7 @@ export default function RecommendationsScreen() {
           data={lanes?.blind || []}
           isLoading={isLoading}
           accent={Colors.dark.neonPink}
-          userId={userId}
+          userId={userId!}
           onCardPress={handleCardPress}
         />
 
@@ -754,7 +756,7 @@ export default function RecommendationsScreen() {
 
       <BanModal
         visible={banModalVisible}
-        userId={userId}
+        userId={userId!}
         onClose={() => setBanModalVisible(false)}
         onBanChanged={() => {
           queryClient.invalidateQueries({ queryKey: ["/api/ai/recommend/lanes", userId] });

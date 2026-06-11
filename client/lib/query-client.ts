@@ -31,7 +31,8 @@ export async function apiRequest(
 ): Promise<Response> {
   const baseUrl = getApiUrl();
   const url = new URL(route, baseUrl);
-  url.searchParams.set("userId", getCurrentUserId());
+  const _uid = getCurrentUserId();
+  if (_uid) url.searchParams.set("userId", _uid);
 
   const res = await fetch(url, {
     method,
@@ -52,7 +53,8 @@ export const getQueryFn: <T>(options: {
   async ({ queryKey }) => {
     const baseUrl = getApiUrl();
     const url = new URL(queryKey.join("/") as string, baseUrl);
-    url.searchParams.set("userId", getCurrentUserId());
+    const _uid = getCurrentUserId();
+    if (_uid) url.searchParams.set("userId", _uid);
 
     const res = await fetch(url, {
       credentials: "include",

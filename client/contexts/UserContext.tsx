@@ -21,7 +21,7 @@ interface OnboardingState {
 }
 
 interface UserContextValue {
-  userId: string;
+  userId: string | null;
   displayName: string | null;
   isLoading: boolean;
   onboardingPath: string | null;
@@ -37,7 +37,7 @@ interface UserContextValue {
 }
 
 const UserContext = createContext<UserContextValue>({
-  userId: "default",
+  userId: null,
   displayName: null,
   isLoading: true,
   onboardingPath: null,
@@ -60,7 +60,7 @@ async function fetchOnboardingStateFromServer(userId: string, baseUrl: string): 
 }
 
 export function UserProvider({ children }: { children: React.ReactNode }) {
-  const [userId, setUserId] = useState("default");
+  const [userId, setUserId] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -163,7 +163,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const refreshOnboardingState = useCallback(async () => {
-    if (!userId || userId === "default") return;
+    if (!userId) return;
     try {
       const baseUrl = getApiUrl();
       const state = await fetchOnboardingStateFromServer(userId, baseUrl);
