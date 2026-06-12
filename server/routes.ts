@@ -449,20 +449,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (typeof userId !== "string" || userId.trim().length === 0) {
       return res.status(400).json({ error: "userId is required" });
     }
-    if (typeof displayName !== "string" || displayName.trim().length === 0) {
-      return res.status(400).json({ error: "displayName is required" });
+    if (typeof displayName !== "string" || displayName.trim().length < 2) {
+      return res.status(400).json({ error: "displayName must be at least 2 characters" });
+    }
+    if (displayName.trim().length > 32) {
+      return res.status(400).json({ error: "displayName must be 32 characters or fewer" });
     }
     if (typeof pin !== "string" || !/^\d{4}$/.test(pin)) {
       return res.status(400).json({ error: "PIN must be exactly 4 digits" });
     }
     try {
-      const taken = await storage.isDisplayNameTaken(displayName.trim(), userId.trim());
-      if (taken) {
+      const normalized = displayName.trim().toLowerCase();
+      // Check uniqueness against the normalized column so casing variants are caught
+      const existing = await storage.getUserProfileByNormalized(normalized);
+      if (existing && existing.userId !== userId.trim()) {
         return res.status(409).json({ error: "Display name is already taken" });
       }
-      await storage.setDisplayName(userId.trim(), displayName.trim(), pin);
+      const hashedPin = await bcrypt.hash(pin, 10);
+      await storage.setDisplayName(userId.trim(), displayName.trim(), hashedPin, normalized);
       return res.json({ success: true });
-    } catch (e) {
+    } catch (e: any) {
+      if (e?.code === "23505" || e?.message?.includes("unique")) {
+        return res.status(409).json({ error: "Display name is already taken" });
+      }
       console.error("[User] setDisplayName error:", e);
       return res.status(500).json({ error: "Failed to set display name" });
     }

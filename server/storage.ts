@@ -237,11 +237,13 @@ class PostgresStorage implements IStorage {
     );
   }
 
-  async setDisplayName(userId: string, displayName: string, pin?: string): Promise<void> {
+  async setDisplayName(userId: string, displayName: string, pin?: string, displayNameNormalized?: string): Promise<void> {
     return this.withRetry(() => {
-      const vals: { userId: string; displayName: string; pin?: string } = { userId, displayName };
+      const vals: { userId: string; displayName: string; displayNameNormalized?: string; pin?: string } = { userId, displayName };
+      if (displayNameNormalized !== undefined) vals.displayNameNormalized = displayNameNormalized;
       if (pin !== undefined) vals.pin = pin;
-      const updateSet: { displayName: string; pin?: string } = { displayName };
+      const updateSet: { displayName: string; displayNameNormalized?: string; pin?: string } = { displayName };
+      if (displayNameNormalized !== undefined) updateSet.displayNameNormalized = displayNameNormalized;
       if (pin !== undefined) updateSet.pin = pin;
       return db
         .insert(userProfiles)
