@@ -148,7 +148,7 @@ export default function OnboardingScreen() {
                 key={path.id}
                 path={path}
                 onPress={onPress}
-                disabled={isComingSoon || manualSubmitting}
+                disabled={!!isComingSoon || manualSubmitting}
                 loading={path.id === "manual" && manualSubmitting}
               />
             );

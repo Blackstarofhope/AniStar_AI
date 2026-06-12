@@ -22,7 +22,7 @@ interface UserContextValue {
   preferredStartTab: string;
   register: (displayName: string, pin: string) => Promise<void>;
   login: (displayName: string, pin: string) => Promise<boolean>;
-  saveDisplayName: (name: string, pin: string) => Promise<void>;
+  saveDisplayName: (name: string, pin?: string) => Promise<void>;
   setOnboardingPath: (path: string) => void;
   markOnboardingUnlocked: () => void;
   setPreferredStartTab: (tab: string) => void;
@@ -39,7 +39,7 @@ const UserContext = createContext<UserContextValue>({
   preferredStartTab: "Schedule",
   register: async () => {},
   login: async () => false,
-  saveDisplayName: async () => {},
+  saveDisplayName: async (_name: string, _pin?: string) => {},
   setOnboardingPath: () => {},
   markOnboardingUnlocked: () => {},
   setPreferredStartTab: () => {},
@@ -159,7 +159,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     return true;
   }, []);
 
-  const saveDisplayName = useCallback(async (name: string, pin: string) => {
+  const saveDisplayName = useCallback(async (name: string, pin?: string) => {
     const trimmed = name.trim();
     const url = new URL("/api/user/displayname", getApiUrl());
     const res = await fetch(url.toString(), {

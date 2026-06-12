@@ -1,5 +1,5 @@
 import React, { useRef, useCallback } from "react";
-import { View, StyleSheet, PanResponder } from "react-native";
+import { View, StyleSheet, PanResponder, type DimensionValue } from "react-native";
 import { Colors, BorderRadius } from "@/constants/theme";
 
 interface GemSliderProps {
@@ -47,8 +47,8 @@ export default function GemSlider({ value, onValueChange, onSlidingComplete, sty
       {...panResponder.panHandlers}
       onLayout={(e) => { trackWidth.current = e.nativeEvent.layout.width; }}
     >
-      <View style={[styles.fill, { width: pct }]} />
-      <View style={[styles.thumb, { left: pct }]} />
+      <View style={[styles.fill, { width: pct as DimensionValue }]} />
+      <View style={[styles.thumb, { left: pct as DimensionValue }]} />
     </View>
   );
 }
