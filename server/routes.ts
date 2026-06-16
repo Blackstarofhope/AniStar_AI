@@ -84,51 +84,66 @@ async function claudeJsonCall(
 // Core training logic — reusable by processPath1Favorites AND retry paths
 // ---------------------------------------------------------------------------
 
+// In-memory lock — prevents Trigger A and the sweep from training the same user
+// simultaneously (duplicate Claude calls, doubled engine ratings).
+// NOTE: single-instance guard only. If the server ever scales to multiple
+// instances, this must move to a DB-level advisory lock (pg_try_advisory_lock).
+const trainingInProgress = new Set<string>();
+
 async function runPath1Training(userId: string, favoritesText: string, tag = "Path1"): Promise<number> {
-  let entries: { title: string; reason: string | null }[] = [];
+  if (trainingInProgress.has(userId)) {
+    console.log(`[Retry] skip — already training user=${userId} (tag=${tag})`);
+    return 0;
+  }
+  trainingInProgress.add(userId);
   try {
-    const text = await claudeJsonCall(
-      "Parse this list of favorite anime. Extract a JSON array where each entry has: title (string), reason (string — the user's stated reason or null if not given). Respond with ONLY valid JSON, no markdown.",
-      favoritesText,
-      1024
-    );
-    const result = JSON.parse(text);
-    if (Array.isArray(result)) entries = result as { title: string; reason: string | null }[];
-    console.log(`[${tag}] Claude parsed ${entries.length} titles: ${entries.map((e) => e.title).join(", ")}`);
-  } catch (e) {
-    console.error(`[${tag}] Claude parse failed:`, e instanceof Error ? e.message : e);
-  }
-
-  let fetchedCount = 0;
-  let embeddedCount = 0;
-  let trainedCount = 0;
-
-  for (const entry of entries) {
-    if (!entry.title || typeof entry.title !== "string") continue;
+    let entries: { title: string; reason: string | null }[] = [];
     try {
-      const results = await searchAndAddAnime(entry.title);
-      const anime = results[0];
-      if (!anime) {
-        console.warn(`[${tag}] Jikan: no results for "${entry.title}" — skipping`);
-        continue;
-      }
-      fetchedCount++;
-      const embedding = await embedAnimeWithVibeFallback(anime as unknown as AnimeInfo);
-      await addAnimeEmbeddings(userId, [{ animeId: anime.mal_id, embedding }]);
-      embeddedCount++;
-      await processFeedback(anime.mal_id, 0.85, userId);
-      trainedCount++;
-      console.log(`[${tag}] Trained ${trainedCount}: "${anime.title}" score=0.85 user=${userId}`);
-      if (entry.reason && typeof entry.reason === "string" && entry.reason.trim()) {
-        await storage.saveAnimeReason(userId, anime.mal_id, entry.reason.trim()).catch(() => {});
-      }
+      const text = await claudeJsonCall(
+        "Parse this list of favorite anime. Extract a JSON array where each entry has: title (string), reason (string — the user's stated reason or null if not given). Respond with ONLY valid JSON, no markdown.",
+        favoritesText,
+        1024
+      );
+      const result = JSON.parse(text);
+      if (Array.isArray(result)) entries = result as { title: string; reason: string | null }[];
+      console.log(`[${tag}] Claude parsed ${entries.length} titles: ${entries.map((e) => e.title).join(", ")}`);
     } catch (e) {
-      console.error(`[${tag}] Failed to process "${entry.title}":`, e instanceof Error ? e.message : e);
+      console.error(`[${tag}] Claude parse failed:`, e instanceof Error ? e.message : e);
     }
-  }
 
-  console.log(`[${tag}] Done: fetched=${fetchedCount} embedded=${embeddedCount} trained=${trainedCount} user=${userId}`);
-  return trainedCount;
+    let fetchedCount = 0;
+    let embeddedCount = 0;
+    let trainedCount = 0;
+
+    for (const entry of entries) {
+      if (!entry.title || typeof entry.title !== "string") continue;
+      try {
+        const results = await searchAndAddAnime(entry.title);
+        const anime = results[0];
+        if (!anime) {
+          console.warn(`[${tag}] Jikan: no results for "${entry.title}" — skipping`);
+          continue;
+        }
+        fetchedCount++;
+        const embedding = await embedAnimeWithVibeFallback(anime as unknown as AnimeInfo);
+        await addAnimeEmbeddings(userId, [{ animeId: anime.mal_id, embedding }]);
+        embeddedCount++;
+        await processFeedback(anime.mal_id, 0.85, userId);
+        trainedCount++;
+        console.log(`[${tag}] Trained ${trainedCount}: "${anime.title}" score=0.85 user=${userId}`);
+        if (entry.reason && typeof entry.reason === "string" && entry.reason.trim()) {
+          await storage.saveAnimeReason(userId, anime.mal_id, entry.reason.trim()).catch(() => {});
+        }
+      } catch (e) {
+        console.error(`[${tag}] Failed to process "${entry.title}":`, e instanceof Error ? e.message : e);
+      }
+    }
+
+    console.log(`[${tag}] Done: fetched=${fetchedCount} embedded=${embeddedCount} trained=${trainedCount} user=${userId}`);
+    return trainedCount;
+  } finally {
+    trainingInProgress.delete(userId);
+  }
 }
 
 // Thin wrapper called on initial onboarding submission
