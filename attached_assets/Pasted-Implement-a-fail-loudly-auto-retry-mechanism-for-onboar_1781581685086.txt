@@ -1,0 +1,31 @@
+Implement a "fail-loudly + auto-retry" mechanism for onboarding training failures. Context: when processPath1Favorites (and the other onboarding paths) call Claude to parse favorites/build vibe profiles, a Claude failure currently results in zero trained anime but the code still unconditionally calls unlockRecommendations() and completeOnboarding() — producing an account that looks complete but has an untrained engine (eng.ratings empty). We want to keep unlocking recs (don't block the user) but flag the account as untrained and auto-retry training later.
+
+PART 1 — Schema (dev/heliumdb only; prod migration happens at next Publish):
+- Add a boolean column to user_onboarding: training_completed (default false, NOT NULL).
+- This is separate from `completed` and `unlocked_recommendations`. It specifically tracks whether anime training actually succeeded.
+
+PART 2 — Mark training outcome honestly:
+- In processPath1Favorites (and the equivalent processing for the other two onboarding paths if they train anime), after processing:
+  - If trained count > 0: set training_completed = true.
+  - If trained count === 0: set training_completed = false, and log a clear ERROR (not a silent info log) e.g. "[Path1] TRAINING FAILED for user=X — 0 anime trained, flagged for retry".
+- Keep calling unlockRecommendations() and completeOnboarding() unconditionally as today — the user is NOT blocked.
+
+PART 3 — Retry trigger A (Recs-tab / recommend endpoint):
+- When a user requests recommendations (the lanes endpoint and/or /api/ai/recommend), check if their onboarding row has training_completed = false AND they have stored favorites/reasons to train from.
+- If so, kick off the SAME training routine (reuse processPath1Favorites logic — refactor it into a reusable function if needed) before/alongside returning recs. Do not block the response for a long time — fire it and return cold-start recs immediately if training isn't done yet; next visit will have real recs.
+- When that retry succeeds (trained > 0), set training_completed = true so it stops retrying.
+
+PART 4 — Retry trigger B (periodic sweep backstop):
+- Add a background interval job (similar pattern to the existing rest-train job) that periodically (e.g. every few minutes) finds user_onboarding rows where training_completed = false AND the user has stored favorites to train from, and re-runs training for them.
+- Cap it so it processes a small batch per sweep and doesn't hammer the Claude API. Set training_completed = true on success.
+- Make sure this does NOT retry forever for users who genuinely have no trainable input (e.g. they submitted gibberish that parses to zero titles) — after N failed retries, give up and log it. Add a retry-count column if needed, or skip rows with no stored favorites.
+
+PART 5 — Constraints:
+- Reuse the existing training/processing code — do not duplicate the Claude-call + Jikan-search + embed + processFeedback logic. Refactor into one shared function both the onboarding handler and the retry paths call.
+- Do not touch the Star prompt, the tab navigation, or the auth system.
+- drizzle-kit push against DEV only. Prod gets it at next Publish.
+
+After implementing: 
+1. List every file changed and show the key diffs.
+2. Simulate a training failure (e.g. temporarily force the parse to return zero) and show the logs proving: recs still unlock, training_completed is set false, the ERROR log fires, and the retry path picks it up and flips training_completed to true once training succeeds.
+3. Confirm npm run check:types passes.

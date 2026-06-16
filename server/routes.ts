@@ -30,6 +30,8 @@ function extractUserId(req: Request): string {
 // Path 1 onboarding — async background processor
 // ---------------------------------------------------------------------------
 
+const MAX_TRAINING_RETRIES = 5;
+const TRAINING_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
 async function claudeJsonCall(
   systemPrompt: string,
@@ -78,9 +80,11 @@ async function claudeJsonCall(
   });
 }
 
-async function processPath1Favorites(userId: string, favoritesText: string): Promise<void> {
-  console.log(`[Path1] Starting async processing for user=${userId} (input: ${favoritesText.length} chars)`);
+// ---------------------------------------------------------------------------
+// Core training logic — reusable by processPath1Favorites AND retry paths
+// ---------------------------------------------------------------------------
 
+async function runPath1Training(userId: string, favoritesText: string, tag = "Path1"): Promise<number> {
   let entries: { title: string; reason: string | null }[] = [];
   try {
     const text = await claudeJsonCall(
@@ -90,13 +94,9 @@ async function processPath1Favorites(userId: string, favoritesText: string): Pro
     );
     const result = JSON.parse(text);
     if (Array.isArray(result)) entries = result as { title: string; reason: string | null }[];
-    console.log(`[Path1] Claude parsed ${entries.length} titles: ${entries.map((e) => e.title).join(", ")}`);
+    console.log(`[${tag}] Claude parsed ${entries.length} titles: ${entries.map((e) => e.title).join(", ")}`);
   } catch (e) {
-    console.error("[Path1] Claude parse failed:", e instanceof Error ? e.message : e);
-  }
-
-  if (entries.length === 0) {
-    console.warn(`[Path1] No titles parsed for user=${userId} — skipping training, still completing onboarding`);
+    console.error(`[${tag}] Claude parse failed:`, e instanceof Error ? e.message : e);
   }
 
   let fetchedCount = 0;
@@ -105,35 +105,53 @@ async function processPath1Favorites(userId: string, favoritesText: string): Pro
 
   for (const entry of entries) {
     if (!entry.title || typeof entry.title !== "string") continue;
-    console.log(`[Path1] Searching Jikan for "${entry.title}"…`);
     try {
       const results = await searchAndAddAnime(entry.title);
       const anime = results[0];
       if (!anime) {
-        console.warn(`[Path1] Jikan returned no results for "${entry.title}" — skipping`);
+        console.warn(`[${tag}] Jikan: no results for "${entry.title}" — skipping`);
         continue;
       }
       fetchedCount++;
-      console.log(`[Path1] Fetched ${fetchedCount}: "${anime.title}" (mal_id=${anime.mal_id})`);
-
       const embedding = await embedAnimeWithVibeFallback(anime as unknown as AnimeInfo);
       await addAnimeEmbeddings(userId, [{ animeId: anime.mal_id, embedding }]);
       embeddedCount++;
-      console.log(`[Path1] Embedded ${embeddedCount}: "${anime.title}"`);
-
       await processFeedback(anime.mal_id, 0.85, userId);
       trainedCount++;
-      console.log(`[Path1] Trained ${trainedCount}: "${anime.title}" score=0.85`);
-
+      console.log(`[${tag}] Trained ${trainedCount}: "${anime.title}" score=0.85 user=${userId}`);
       if (entry.reason && typeof entry.reason === "string" && entry.reason.trim()) {
         await storage.saveAnimeReason(userId, anime.mal_id, entry.reason.trim()).catch(() => {});
       }
     } catch (e) {
-      console.error(`[Path1] Failed to process "${entry.title}":`, e instanceof Error ? e.message : e);
+      console.error(`[${tag}] Failed to process "${entry.title}":`, e instanceof Error ? e.message : e);
     }
   }
 
-  console.log(`[Path1] Processing complete: fetched=${fetchedCount}, embedded=${embeddedCount}, trained=${trainedCount} for user=${userId}`);
+  console.log(`[${tag}] Done: fetched=${fetchedCount} embedded=${embeddedCount} trained=${trainedCount} user=${userId}`);
+  return trainedCount;
+}
+
+// Thin wrapper called on initial onboarding submission
+async function processPath1Favorites(userId: string, favoritesText: string): Promise<void> {
+  console.log(`[Path1] Starting async processing for user=${userId} (input: ${favoritesText.length} chars)`);
+
+  await storage.saveFavoritesInput(userId, favoritesText).catch((e) =>
+    console.error("[Path1] Failed to persist favorites input:", e instanceof Error ? e.message : e)
+  );
+
+  const trainedCount = await runPath1Training(userId, favoritesText, "Path1");
+
+  try {
+    if (trainedCount > 0) {
+      await storage.setTrainingCompleted(userId, true);
+      console.log(`[Path1] Training succeeded — ${trainedCount} anime trained for user=${userId}`);
+    } else {
+      await storage.setTrainingCompleted(userId, false);
+      console.error(`[Path1] TRAINING FAILED for user=${userId} — 0 anime trained, flagged for retry`);
+    }
+  } catch (e) {
+    console.error("[Path1] setTrainingCompleted failed:", e instanceof Error ? e.message : e);
+  }
 
   try {
     await storage.unlockRecommendations(userId);
@@ -141,6 +159,22 @@ async function processPath1Favorites(userId: string, favoritesText: string): Pro
     console.log(`[Path1] Onboarding complete — recommendations unlocked for user=${userId}`);
   } catch (e) {
     console.error("[Path1] Failed to complete onboarding:", e instanceof Error ? e.message : e);
+  }
+}
+
+// Retry helper — called by both Retry Trigger A (recs endpoint) and the sweep
+async function retryPath1Training(userId: string, favoritesInput: string, tag: string): Promise<void> {
+  try {
+    await storage.incrementRetryCount(userId);
+    const trainedCount = await runPath1Training(userId, favoritesInput, tag);
+    if (trainedCount > 0) {
+      await storage.setTrainingCompleted(userId, true);
+      console.log(`[${tag}] Retry succeeded — ${trainedCount} anime trained for user=${userId}`);
+    } else {
+      console.error(`[${tag}] TRAINING FAILED for user=${userId} — 0 anime trained after retry`);
+    }
+  } catch (e) {
+    console.error(`[${tag}] Retry threw for user=${userId}:`, e instanceof Error ? e.message : e);
   }
 }
 
@@ -308,6 +342,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!onboarding?.unlockedRecommendations) {
         return res.status(403).json({ error: "Onboarding not complete" });
       }
+      if (!onboarding.trainingCompleted && onboarding.favoritesInput && onboarding.retryCount < MAX_TRAINING_RETRIES) {
+        setImmediate(() => {
+          retryPath1Training(userId, onboarding.favoritesInput!, "RetryA-lanes").catch((e) =>
+            console.error("[RetryA-lanes] Unhandled:", e)
+          );
+        });
+      }
       const lanes = await getThreeLaneRecommendations(userId, 15000);
       res.json(lanes);
     } catch (e) {
@@ -323,6 +364,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const onboarding = await storage.getOnboardingState(userId);
       if (!onboarding?.unlockedRecommendations) {
         return res.status(403).json({ error: "Onboarding not complete" });
+      }
+      if (!onboarding.trainingCompleted && onboarding.favoritesInput && onboarding.retryCount < MAX_TRAINING_RETRIES) {
+        setImmediate(() => {
+          retryPath1Training(userId, onboarding.favoritesInput!, "RetryA-recs").catch((e) =>
+            console.error("[RetryA-recs] Unhandled:", e)
+          );
+        });
       }
       const recommendations = await getRecommendations(userId, limit, 12000);
       res.json({ recommendations });
@@ -865,6 +913,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     console.log(`[Path2/rankings] Processing ${rankings.length} rankings for user=${userId}`);
 
     // Process every ranking — save rating and train the engine
+    let path2TrainedCount = 0;
     for (const { characterId, rating } of rankings) {
       await storage.saveCharacterRating(userId, characterId, rating).catch((e) =>
         console.error(`[Path2/rankings] saveCharacterRating failed (${characterId}):`, e instanceof Error ? e.message : e)
@@ -884,12 +933,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const embedding = await embedAnimeWithVibeFallback(anime as unknown as AnimeInfo);
         await addAnimeEmbeddings(userId, [{ animeId: anime.mal_id, embedding }]);
         await processFeedback(anime.mal_id, feedbackScore, userId);
+        path2TrainedCount++;
         console.log(
           `[Path2/rankings] "${character.name}" → "${anime.title}" score=${feedbackScore.toFixed(2)} user=${userId}`
         );
       } catch (e) {
         console.error(`[Path2/rankings] Failed to process "${character.name}":`, e instanceof Error ? e.message : e);
       }
+    }
+
+    // Mark training outcome honestly
+    try {
+      if (path2TrainedCount > 0) {
+        await storage.setTrainingCompleted(userId, true);
+        console.log(`[Path2/rankings] Training succeeded — ${path2TrainedCount} anime trained for user=${userId}`);
+      } else {
+        await storage.setTrainingCompleted(userId, false);
+        console.error(`[Path2/rankings] TRAINING FAILED for user=${userId} — 0 anime trained, flagged for retry`);
+      }
+    } catch (e) {
+      console.error("[Path2/rankings] setTrainingCompleted failed:", e instanceof Error ? e.message : e);
     }
 
     // Complete onboarding
@@ -984,6 +1047,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }).catch(() => {});
     initStarLearning().catch((e) => console.error("[Star] Learning init failed:", e));
   }, 5000);
+
+  // Part 4 — Periodic sweep: retry training for users whose Path1 training previously failed
+  setInterval(() => {
+    storage.getUntrainedUsers(MAX_TRAINING_RETRIES).then(async (users) => {
+      const batch = users.slice(0, 3);
+      if (batch.length > 0) {
+        console.log(`[Sweep] ${users.length} untrained user(s) found — processing batch of ${batch.length}`);
+      }
+      for (const user of batch) {
+        if (!user.favoritesInput) continue;
+        await retryPath1Training(user.userId, user.favoritesInput, "Sweep").catch(() => {});
+      }
+    }).catch((e) =>
+      console.warn("[Sweep] getUntrainedUsers failed:", e instanceof Error ? e.message : e)
+    );
+  }, TRAINING_SWEEP_INTERVAL_MS);
 
   return httpServer;
 }

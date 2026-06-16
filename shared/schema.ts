@@ -89,6 +89,9 @@ export const userOnboarding = pgTable("user_onboarding", {
   pathChosen: text("path_chosen"),
   completed: boolean("completed").notNull().default(false),
   unlockedRecommendations: boolean("unlocked_recommendations").notNull().default(false),
+  trainingCompleted: boolean("training_completed").notNull().default(false),
+  favoritesInput: text("favorites_input"),
+  retryCount: integer("retry_count").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   completedAt: timestamp("completed_at"),
 });

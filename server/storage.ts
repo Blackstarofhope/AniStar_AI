@@ -1,7 +1,7 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { randomUUID } from "crypto";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, lt, sql } from "drizzle-orm";
 import {
   userEngineState, animeSearched, vibeProfiles,
   userRatings, animeDiscovery, userProfiles,
@@ -78,10 +78,26 @@ export interface IStorage {
   incrementChatCount(userId: string, date: string): Promise<number>;
   getChatCount(userId: string, date: string): Promise<number>;
 
-  getOnboardingState(userId: string): Promise<{ pathChosen: string | null; completed: boolean; unlockedRecommendations: boolean } | null>;
+  getOnboardingState(userId: string): Promise<{
+    pathChosen: string | null;
+    completed: boolean;
+    unlockedRecommendations: boolean;
+    trainingCompleted: boolean;
+    favoritesInput: string | null;
+    retryCount: number;
+  } | null>;
   setOnboardingPath(userId: string, path: string): Promise<void>;
   completeOnboarding(userId: string): Promise<void>;
   unlockRecommendations(userId: string): Promise<void>;
+  setTrainingCompleted(userId: string, completed: boolean): Promise<void>;
+  saveFavoritesInput(userId: string, input: string): Promise<void>;
+  incrementRetryCount(userId: string): Promise<void>;
+  getUntrainedUsers(maxRetries: number): Promise<{
+    userId: string;
+    pathChosen: string | null;
+    favoritesInput: string | null;
+    retryCount: number;
+  }[]>;
   saveCharacterRating(userId: string, characterId: string, rating: number): Promise<void>;
   getCharacterRatings(userId: string): Promise<{ characterId: string; rating: number }[]>;
 
@@ -498,7 +514,14 @@ class PostgresStorage implements IStorage {
     );
   }
 
-  async getOnboardingState(userId: string): Promise<{ pathChosen: string | null; completed: boolean; unlockedRecommendations: boolean } | null> {
+  async getOnboardingState(userId: string): Promise<{
+    pathChosen: string | null;
+    completed: boolean;
+    unlockedRecommendations: boolean;
+    trainingCompleted: boolean;
+    favoritesInput: string | null;
+    retryCount: number;
+  } | null> {
     return this.withRetry(() =>
       db
         .select()
@@ -510,6 +533,9 @@ class PostgresStorage implements IStorage {
             pathChosen: rows[0].pathChosen,
             completed: rows[0].completed,
             unlockedRecommendations: rows[0].unlockedRecommendations,
+            trainingCompleted: rows[0].trainingCompleted,
+            favoritesInput: rows[0].favoritesInput ?? null,
+            retryCount: rows[0].retryCount,
           };
         })
     );
@@ -587,6 +613,76 @@ class PostgresStorage implements IStorage {
           set: { reason },
         })
         .then(() => undefined)
+    );
+  }
+
+  async setTrainingCompleted(userId: string, completed: boolean): Promise<void> {
+    return this.withRetry(() =>
+      db
+        .insert(userOnboarding)
+        .values({ userId, trainingCompleted: completed })
+        .onConflictDoUpdate({
+          target: userOnboarding.userId,
+          set: { trainingCompleted: completed },
+        })
+        .then(() => undefined)
+    );
+  }
+
+  async saveFavoritesInput(userId: string, input: string): Promise<void> {
+    return this.withRetry(() =>
+      db
+        .insert(userOnboarding)
+        .values({ userId, favoritesInput: input })
+        .onConflictDoUpdate({
+          target: userOnboarding.userId,
+          set: { favoritesInput: input },
+        })
+        .then(() => undefined)
+    );
+  }
+
+  async incrementRetryCount(userId: string): Promise<void> {
+    return this.withRetry(() =>
+      db
+        .update(userOnboarding)
+        .set({ retryCount: sql`${userOnboarding.retryCount} + 1` })
+        .where(eq(userOnboarding.userId, userId))
+        .then(() => undefined)
+    );
+  }
+
+  async getUntrainedUsers(maxRetries: number): Promise<{
+    userId: string;
+    pathChosen: string | null;
+    favoritesInput: string | null;
+    retryCount: number;
+  }[]> {
+    return this.withRetry(() =>
+      db
+        .select({
+          userId: userOnboarding.userId,
+          pathChosen: userOnboarding.pathChosen,
+          favoritesInput: userOnboarding.favoritesInput,
+          retryCount: userOnboarding.retryCount,
+        })
+        .from(userOnboarding)
+        .where(
+          and(
+            eq(userOnboarding.trainingCompleted, false),
+            lt(userOnboarding.retryCount, maxRetries),
+            isNotNull(userOnboarding.favoritesInput)
+          )
+        )
+        .limit(10)
+        .then((rows) =>
+          rows.map((r) => ({
+            userId: r.userId,
+            pathChosen: r.pathChosen,
+            favoritesInput: r.favoritesInput ?? null,
+            retryCount: r.retryCount,
+          }))
+        )
     );
   }
 }
