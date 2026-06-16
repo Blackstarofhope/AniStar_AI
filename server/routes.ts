@@ -16,6 +16,7 @@ import { initStarLearning, recordChatFeedback } from "./ai/starLearning.js";
 import { embedAnimeWithVibeFallback, type AnimeInfo } from "./ai/textEmbedder.js";
 import { loadCharacterPool, type CharacterEntry } from "./ai/characterPool.js";
 import type { Recommendation } from "./ai/recommendEngine.js";
+import { CLAUDE_MODEL, CLAUDE_ENDPOINT } from "./constants.js";
 
 function extractUserId(req: Request): string {
   const raw =
@@ -29,8 +30,6 @@ function extractUserId(req: Request): string {
 // Path 1 onboarding — async background processor
 // ---------------------------------------------------------------------------
 
-const CLAUDE_ONBOARDING_ENDPOINT = "https://api.anthropic.com/v1/messages";
-const CLAUDE_ONBOARDING_MODEL = "claude-sonnet-4-20250514";
 
 async function claudeJsonCall(
   systemPrompt: string,
@@ -41,14 +40,14 @@ async function claudeJsonCall(
   if (!apiKey) throw new Error("No ANTHROPIC_API_KEY");
 
   const payload = JSON.stringify({
-    model: CLAUDE_ONBOARDING_MODEL,
+    model: CLAUDE_MODEL,
     max_tokens: maxTokens,
     system: systemPrompt,
     messages: [{ role: "user", content: userContent }],
   });
 
   return new Promise<string>((resolve, reject) => {
-    const url = new URL(CLAUDE_ONBOARDING_ENDPOINT);
+    const url = new URL(CLAUDE_ENDPOINT);
     const options = {
       hostname: url.hostname,
       path: url.pathname,

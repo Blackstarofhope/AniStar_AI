@@ -145,8 +145,7 @@ async function detectAndApplyBan(
 // Anthropic Claude API integration
 // ---------------------------------------------------------------------------
 
-const CLAUDE_MODEL = "claude-sonnet-4-20250514";
-const CLAUDE_ENDPOINT = "https://api.anthropic.com/v1/messages";
+import { CLAUDE_MODEL, CLAUDE_ENDPOINT } from "../constants.js";
 
 function httpsPost(url: string, apiKey: string, body: object): Promise<string> {
   return new Promise((resolve, reject) => {

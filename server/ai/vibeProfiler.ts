@@ -1,8 +1,7 @@
 import * as https from "https";
 import { storage } from "../storage.js";
 
-const CLAUDE_MODEL = "claude-sonnet-4-20250514";
-const CLAUDE_ENDPOINT = "https://api.anthropic.com/v1/messages";
+import { CLAUDE_MODEL, CLAUDE_ENDPOINT } from "../constants.js";
 
 const CACHE_MAX = 500;
 const RATE_LIMIT_MS = 500;
