@@ -6,7 +6,7 @@ import {
   userEngineState, animeSearched, vibeProfiles,
   userRatings, animeDiscovery, userProfiles,
   userBanList, userWatchState, userPreferences, userChatUsage,
-  userOnboarding, userCharacterRatings, animeReasons,
+  userOnboarding, userCharacterRatings, animeReasons, userPersonalitySignals,
 } from "@shared/schema";
 
 if (!process.env.DATABASE_URL) {
@@ -103,6 +103,17 @@ export interface IStorage {
 
   saveAnimeReason(userId: string, malId: number, reason: string): Promise<void>;
   getAllUserProfiles(): Promise<{ userId: string; displayName: string }[]>;
+
+  savePersonalitySignal(
+    userId: string,
+    signalType: string,
+    value: string,
+    weight?: number,
+    source?: string
+  ): Promise<void>;
+  getPersonalitySignals(
+    userId: string
+  ): Promise<{ signalType: string; value: string; weight: number; source: string }[]>;
 }
 
 class PostgresStorage implements IStorage {
@@ -681,6 +692,48 @@ class PostgresStorage implements IStorage {
             pathChosen: r.pathChosen,
             favoritesInput: r.favoritesInput ?? null,
             retryCount: r.retryCount,
+          }))
+        )
+    );
+  }
+
+  async savePersonalitySignal(
+    userId: string,
+    signalType: string,
+    value: string,
+    weight = 1.0,
+    source = "chat"
+  ): Promise<void> {
+    return this.withRetry(() =>
+      db
+        .insert(userPersonalitySignals)
+        .values({ userId, signalType, value, weight, source })
+        .onConflictDoUpdate({
+          target: [
+            userPersonalitySignals.userId,
+            userPersonalitySignals.signalType,
+            userPersonalitySignals.value,
+          ],
+          set: { weight, source },
+        })
+        .then(() => undefined)
+    );
+  }
+
+  async getPersonalitySignals(
+    userId: string
+  ): Promise<{ signalType: string; value: string; weight: number; source: string }[]> {
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(userPersonalitySignals)
+        .where(eq(userPersonalitySignals.userId, userId))
+        .then((rows) =>
+          rows.map((r) => ({
+            signalType: r.signalType,
+            value: r.value,
+            weight: r.weight,
+            source: r.source,
           }))
         )
     );

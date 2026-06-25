@@ -290,3 +290,14 @@ export async function embedAnimeWithVibeFallback(anime: AnimeInfo): Promise<numb
     return embedAnimeWithFallback(anime);
   }
 }
+
+/**
+ * Embed arbitrary text (character traits, user reasons, personality phrases)
+ * using the same CLIP encoder as anime embeddings so vectors are comparable.
+ * Returns a unit-norm vector of EMBEDDING_DIM dimensions.
+ */
+export async function embedText(text: string): Promise<number[]> {
+  await loadCLIP();
+  const raw = await encodeText(text.slice(0, 300));
+  return normalize(Array.from(raw));
+}

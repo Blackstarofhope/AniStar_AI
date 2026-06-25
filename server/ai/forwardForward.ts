@@ -168,13 +168,28 @@ export function applyEWCCorrection(
   }
 }
 
+// Returns pre-layerNorm activations (raw) for goodness measurement and the
+// layerNorm output (prop) for propagation to the next layer.  Measuring
+// goodness on raw activations keeps the score variable across inputs; if we
+// measured on the layerNorm output the score would collapse to ~layerSize
+// for every input because layerNorm forces mean=0, var=1.
+function inferLayerActivations(
+  layer: FFLayer,
+  input: number[]
+): { raw: number[]; prop: number[] } {
+  const normedInput = normalize(input);
+  const z = matvec(layer.weights, normedInput);
+  const h = relu(addVec(z, layer.biases));
+  return { raw: h, prop: layerNorm(h) };
+}
+
 export function infer(net: FFNetworkState, input: number[]): number {
   let totalGoodness = 0;
   let current = input;
   for (const layer of net.layers) {
-    const h = layerForward(layer, current);
-    totalGoodness += goodness(h);
-    current = h;
+    const { raw, prop } = inferLayerActivations(layer, current);
+    totalGoodness += goodness(raw);
+    current = prop;
   }
   return totalGoodness / (net.layers.length || 1);
 }

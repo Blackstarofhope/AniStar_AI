@@ -13,7 +13,7 @@ import { generateVibeProfile, getVibeProfileFromCache } from "./ai/vibeProfiler.
 import { processChat, STAR_NAME, STAR_BIO } from "./ai/starChat.js";
 import type { ChatMessage } from "./ai/starChat.js";
 import { initStarLearning, recordChatFeedback } from "./ai/starLearning.js";
-import { embedAnimeWithVibeFallback, type AnimeInfo } from "./ai/textEmbedder.js";
+import { embedAnimeWithVibeFallback, embedText, type AnimeInfo } from "./ai/textEmbedder.js";
 import { loadCharacterPool, type CharacterEntry } from "./ai/characterPool.js";
 import type { Recommendation } from "./ai/recommendEngine.js";
 import { CLAUDE_MODEL, CLAUDE_ENDPOINT } from "./constants.js";
@@ -125,15 +125,29 @@ async function runPath1Training(userId: string, favoritesText: string, tag = "Pa
           continue;
         }
         fetchedCount++;
-        const embedding = await embedAnimeWithVibeFallback(anime as unknown as AnimeInfo);
-        await addAnimeEmbeddings(userId, [{ animeId: anime.mal_id, embedding }]);
+        const animeEmbedding = await embedAnimeWithVibeFallback(anime as unknown as AnimeInfo);
+        await addAnimeEmbeddings(userId, [{ animeId: anime.mal_id, embedding: animeEmbedding }]);
         embeddedCount++;
-        await processFeedback(anime.mal_id, 0.85, userId);
-        trainedCount++;
-        console.log(`[${tag}] Trained ${trainedCount}: "${anime.title}" score=0.85 user=${userId}`);
+
+        // Blend the user's stated reason (30%) into the training embedding so the
+        // FF network learns what specifically resonated, not just the anime metadata.
+        let trainingEmb: number[] | undefined;
         if (entry.reason && typeof entry.reason === "string" && entry.reason.trim()) {
-          await storage.saveAnimeReason(userId, anime.mal_id, entry.reason.trim()).catch(() => {});
+          const trimmedReason = entry.reason.trim();
+          await storage.saveAnimeReason(userId, anime.mal_id, trimmedReason).catch(() => {});
+          try {
+            const reasonEmb = await embedText(trimmedReason);
+            const blended = animeEmbedding.map((v, i) => 0.7 * v + 0.3 * reasonEmb[i]);
+            const bNorm = Math.sqrt(blended.reduce((s, x) => s + x * x, 0)) + 1e-8;
+            trainingEmb = blended.map((x) => x / bNorm);
+          } catch {
+            // fall back to anime-only embedding
+          }
         }
+
+        await processFeedback(anime.mal_id, 0.85, userId, trainingEmb);
+        trainedCount++;
+        console.log(`[${tag}] Trained ${trainedCount}: "${anime.title}" score=0.85${trainingEmb ? " (reason-blended)" : ""} user=${userId}`);
       } catch (e) {
         console.error(`[${tag}] Failed to process "${entry.title}":`, e instanceof Error ? e.message : e);
       }
@@ -732,6 +746,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     try {
       await storage.setWatchState(userId, malId, state);
+
+      // Completions and drops are strong preference signals — train the engine
+      // non-blockingly so the response is never delayed.
+      if (state === "completed" || state === "dropped") {
+        const feedbackScore = state === "completed" ? 0.9 : 0.15;
+        processFeedback(malId, feedbackScore, userId).catch((e) =>
+          console.warn(`[WatchState] processFeedback failed mal_id=${malId}:`, e instanceof Error ? e.message : e)
+        );
+      }
+
       res.json({ success: true });
     } catch (e) {
       console.error("[User] setWatchState error:", e);
@@ -945,12 +969,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const anime = results[0];
         if (!anime) continue;
 
-        const embedding = await embedAnimeWithVibeFallback(anime as unknown as AnimeInfo);
-        await addAnimeEmbeddings(userId, [{ animeId: anime.mal_id, embedding }]);
-        await processFeedback(anime.mal_id, feedbackScore, userId);
+        const animeEmbedding2 = await embedAnimeWithVibeFallback(anime as unknown as AnimeInfo);
+        await addAnimeEmbeddings(userId, [{ animeId: anime.mal_id, embedding: animeEmbedding2 }]);
+
+        // Blend the character's 'represents' archetype text (30%) with the anime
+        // embedding (70%) so the FF training signal captures what the user
+        // actually resonated with rather than just the anime at large.
+        let traitTrainingEmb: number[] | undefined;
+        if (character.represents) {
+          try {
+            const traitEmb = await embedText(character.represents);
+            const blended = animeEmbedding2.map((v, i) => 0.7 * v + 0.3 * traitEmb[i]);
+            const bNorm = Math.sqrt(blended.reduce((s, x) => s + x * x, 0)) + 1e-8;
+            traitTrainingEmb = blended.map((x) => x / bNorm);
+          } catch {
+            // fall back to anime-only embedding
+          }
+        }
+
+        await processFeedback(anime.mal_id, feedbackScore, userId, traitTrainingEmb);
         path2TrainedCount++;
         console.log(
-          `[Path2/rankings] "${character.name}" → "${anime.title}" score=${feedbackScore.toFixed(2)} user=${userId}`
+          `[Path2/rankings] "${character.name}" → "${anime.title}" score=${feedbackScore.toFixed(2)}${traitTrainingEmb ? " (trait-blended)" : ""} user=${userId}`
         );
       } catch (e) {
         console.error(`[Path2/rankings] Failed to process "${character.name}":`, e instanceof Error ? e.message : e);

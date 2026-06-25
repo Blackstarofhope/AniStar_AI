@@ -22,7 +22,11 @@ export interface ModelState {
   starLearning?: StarLearningState;
 }
 
-const CURRENT_VERSION = 2;
+// Version 3: infer() now measures goodness on pre-layerNorm activations.
+// Old file-based saves had goodnessHistory calibrated to the layerNorm scale
+// (~149/layer) — discard them so engines start fresh with correct variance.
+// DB-stored engines only check layer shape, not version, so they load fine.
+const CURRENT_VERSION = 3;
 
 export function loadModelState(): ModelState | null {
   try {

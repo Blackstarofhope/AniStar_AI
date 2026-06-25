@@ -296,6 +296,29 @@ export async function processChat(
 
   const signals = extractChatSignals(message, catalogTitles);
 
+  // Persist genre/mood signals extracted from chat into the personality-signals
+  // table so they survive across sessions and can inform future recommendations.
+  // Fire-and-forget — don't block the response on DB writes.
+  if (signals.likedGenres.length > 0 || signals.dislikedGenres.length > 0 || signals.moodGenres.length > 0) {
+    const signalWrites: Promise<void>[] = [];
+    for (const genre of signals.likedGenres) {
+      signalWrites.push(
+        storage.savePersonalitySignal(userId, "genre_like", genre, 1.0, "chat").catch(() => {})
+      );
+    }
+    for (const genre of signals.dislikedGenres) {
+      signalWrites.push(
+        storage.savePersonalitySignal(userId, "genre_dislike", genre, 1.0, "chat").catch(() => {})
+      );
+    }
+    for (const genre of signals.moodGenres) {
+      signalWrites.push(
+        storage.savePersonalitySignal(userId, "mood_genre", genre, 0.7, "chat").catch(() => {})
+      );
+    }
+    Promise.all(signalWrites).catch(() => {});
+  }
+
   const hasKeywordSignals =
     signals.likedGenres.length > 0 ||
     signals.dislikedGenres.length > 0 ||

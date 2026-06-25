@@ -114,3 +114,23 @@ export const animeReasons = pgTable("anime_reasons", {
 }, (t) => ({
   pk: primaryKey({ columns: [t.userId, t.malId] }),
 }));
+
+// Chat-extracted preference signals — genre affinities, tone preferences, and
+// trope likes/dislikes surfaced from natural-language chat messages.
+// signalType: "genre_like" | "genre_dislike" | "mood_genre"
+// value: the genre or mood string (e.g. "Action", "dark atmosphere")
+// weight: 1.0 default; caller may adjust for confidence
+// source: "chat" | "onboarding" for provenance tracking
+export const userPersonalitySignals = pgTable("user_personality_signals", {
+  id: serial("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  signalType: text("signal_type").notNull(),
+  value: text("value").notNull(),
+  weight: real("weight").notNull().default(1.0),
+  source: text("source").notNull().default("chat"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  userSignalUnique: unique("user_personality_signals_user_signal_unique").on(
+    t.userId, t.signalType, t.value
+  ),
+}));

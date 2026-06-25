@@ -666,43 +666,84 @@ export async function getThreeLaneRecommendations(
   return Promise.race([coreWork(), timeoutGuard]);
 }
 
+// ---------------------------------------------------------------------------
+// Hard-negative helpers (T003)
+// Instead of always using corrupted random noise as the FF negative, try to
+// source a real embedding from the opposite end of the user's rating history.
+// Falls back to corrupted input when the history pool is too small.
+// ---------------------------------------------------------------------------
+
+function sampleHardNegative(
+  ratings: EngineState["ratings"],
+  excludeId: number
+): number[] | null {
+  const pool = ratings.filter((r) => r.animeId !== excludeId && r.rating < 0.3);
+  if (pool.length === 0) return null;
+  return pool[Math.floor(Math.random() * pool.length)].embedding;
+}
+
+function sampleHardPositive(
+  ratings: EngineState["ratings"],
+  excludeId: number
+): number[] | null {
+  const pool = ratings.filter((r) => r.animeId !== excludeId && r.rating > 0.7);
+  if (pool.length === 0) return null;
+  return pool[Math.floor(Math.random() * pool.length)].embedding;
+}
+
+// ---------------------------------------------------------------------------
+// processFeedback
+// trainingEmbeddingOverride (T004): callers (Path 1 reason blending, Path 2
+// character trait blending) may supply a pre-blended embedding for FF training.
+// The override goes into eng.ratings (shaping the user preference vector) but
+// the canonical anime embedding still goes into allAnimeEmbeddings (used for
+// recommendation cosine scoring), keeping the two concerns separate.
+// ---------------------------------------------------------------------------
+
 export async function processFeedback(
   malId: number,
   rating: number,
-  userId = "default"
+  userId = "default",
+  trainingEmbeddingOverride?: number[]
 ): Promise<{ epoch: number; goodness: number; justUnlocked: boolean }> {
   const eng = await getEngine(userId);
   eng.isTraining = true;
 
   try {
-    let embedding = eng.allAnimeEmbeddings.find((e) => e.animeId === malId)?.embedding;
+    // Always resolve the canonical anime embedding for allAnimeEmbeddings.
+    let animeEmbedding = eng.allAnimeEmbeddings.find((e) => e.animeId === malId)?.embedding;
 
-    if (!embedding) {
+    if (!animeEmbedding) {
       const animeList = await getAllCurrentAnime();
       const anime = animeList.find((a) => a.mal_id === malId);
       if (anime) {
-        embedding = await embedAnimeWithVibeFallback(anime as AnimeInfo);
-        eng.allAnimeEmbeddings.push({ animeId: malId, embedding });
+        animeEmbedding = await embedAnimeWithVibeFallback(anime as AnimeInfo);
+        eng.allAnimeEmbeddings.push({ animeId: malId, embedding: animeEmbedding });
       } else {
         const vec = new Array(EMBEDDING_DIM).fill(0.1);
-        embedding = normalize(vec);
+        animeEmbedding = normalize(vec);
       }
     }
 
-    const textModulated = phaseModulatedEmbedding(embedding, eng.kuramoto.textPhases);
-    const vibeModulated = phaseModulatedVibeEmbedding(embedding, eng.kuramoto);
-    const blended = textModulated.map((v, i) => (v + vibeModulated[i]) / 2);
-    const finalEmbedding = normalize(blended);
+    // trainingRaw: what actually shapes the user preference vector.
+    // When a caller provides an override (e.g. character trait or reason blend),
+    // that richer signal is used for training; otherwise fall back to the anime embedding.
+    const trainingRaw = trainingEmbeddingOverride ?? animeEmbedding;
+
+    // Inline phase-modulation helper — avoids repeating the three-step blend.
+    const modulate = (emb: number[]): number[] => {
+      const t = phaseModulatedEmbedding(emb, eng.kuramoto.textPhases);
+      const v = phaseModulatedVibeEmbedding(emb, eng.kuramoto);
+      return normalize(t.map((x, i) => (x + v[i]) / 2));
+    };
+
+    const finalEmbedding = modulate(trainingRaw);
 
     const replaySamples = sampleReplay(eng.ewc, 4);
     const trainingBatch: { embedding: number[]; rating: number }[] = [
       { embedding: finalEmbedding, rating },
       ...replaySamples.map((r) => ({
-        embedding: (() => {
-          const t = phaseModulatedEmbedding(r.embedding, eng.kuramoto.textPhases);
-          const vb = phaseModulatedVibeEmbedding(r.embedding, eng.kuramoto);
-          return normalize(t.map((v, i) => (v + vb[i]) / 2));
-        })(),
+        embedding: modulate(r.embedding),
         rating: r.rating,
       })),
     ];
@@ -710,8 +751,27 @@ export async function processFeedback(
     let totalGoodness = 0;
     for (const sample of trainingBatch) {
       const liked = sample.rating > 0.5;
-      const positive = liked ? sample.embedding : createCorruptedInput(sample.embedding);
-      const negative = liked ? createCorruptedInput(sample.embedding) : sample.embedding;
+
+      let positive: number[];
+      let negative: number[];
+
+      if (liked) {
+        positive = sample.embedding;
+        // Prefer a real disliked embedding as the hard negative so the
+        // FF decision boundary aligns with actual content the user rejected.
+        // Fall back to corrupted noise when no low-rated history exists yet.
+        const rawHardNeg = sampleHardNegative(eng.ratings, malId);
+        negative = rawHardNeg
+          ? modulate(rawHardNeg)
+          : createCorruptedInput(sample.embedding);
+      } else {
+        // Prefer a real liked embedding as the hard positive.
+        const rawHardPos = sampleHardPositive(eng.ratings, malId);
+        positive = rawHardPos
+          ? modulate(rawHardPos)
+          : createCorruptedInput(sample.embedding);
+        negative = sample.embedding;
+      }
 
       const g = trainStep(eng.network, positive, negative);
       totalGoodness += g;
@@ -740,20 +800,28 @@ export async function processFeedback(
       }
     }
 
+    // Store trainingRaw (not animeEmbedding) so the user preference vector
+    // reflects trait/reason nuance when an override was provided.
     const replayEntry: ReplayEntry = {
       animeId: malId,
-      embedding,
+      embedding: trainingRaw,
       rating,
       timestamp: Date.now(),
     };
     addToReplay(eng.ewc, replayEntry);
 
-    eng.ratings.push({ animeId: malId, embedding, rating, timestamp: Date.now() });
+    eng.ratings.push({ animeId: malId, embedding: trainingRaw, rating, timestamp: Date.now() });
     if (eng.ratings.length > 1000) eng.ratings.shift();
 
     if (eng.ratings.length >= 10 && eng.network.epoch % 10 === 0) {
       computeFisher(eng.ewc, eng.network, eng.ratings);
     }
+
+    // Persist rating to user_ratings table (T001: this call was missing).
+    // user_ratings is the source of truth for the Path 3 unlock check below.
+    storage.saveRating(userId, malId, rating).catch((e) =>
+      console.warn(`[AI] saveRating failed mal_id=${malId}:`, e instanceof Error ? e.message : e)
+    );
 
     await persistEngine(userId, eng);
 
