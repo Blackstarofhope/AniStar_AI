@@ -366,7 +366,10 @@ async function scoreAnimeList(
         const finalEmbedding = normalize(blended);
         const ffScore = infer(eng.network, finalEmbedding);
         const cosSim = cosineSim(finalEmbedding, userPref);
-        const combinedScore = 0.6 * Math.tanh(ffScore / 5) + 0.4 * (cosSim + 1) / 2;
+        // ffScore is already bounded (0, 1) — no tanh squashing needed.
+        // (cosSim + 1) / 2 maps cosine similarity from [−1, 1] → [0, 1].
+        // Combined score is therefore in [0, 1] with no saturation risk.
+        const combinedScore = 0.6 * ffScore + 0.4 * (cosSim + 1) / 2;
         const popularityFactor = anime.score ? (anime.score / 10) : 0.5;
         const biasAdjustment = (hiddenGemBias - 0.5) * 0.4;
         const adjustedScore = combinedScore - (biasAdjustment * popularityFactor) + (biasAdjustment * (1 - popularityFactor));

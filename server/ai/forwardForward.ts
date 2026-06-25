@@ -184,14 +184,29 @@ function inferLayerActivations(
 }
 
 export function infer(net: FFNetworkState, input: number[]): number {
-  let totalGoodness = 0;
+  if (net.layers.length === 0) return 0.5;
+  let totalNormGoodness = 0;
   let current = input;
   for (const layer of net.layers) {
     const { raw, prop } = inferLayerActivations(layer, current);
-    totalGoodness += goodness(raw);
+    // Divide goodness by layer width to get mean squared activation.
+    // This normalises across layers of different sizes (a wider layer would
+    // otherwise dominate the total) and keeps the value in a stable range
+    // regardless of architecture. Typical fresh-network range: 0.3 – 0.7.
+    totalNormGoodness += goodness(raw) / (raw.length || 1);
+    // Propagate the layerNorm output, not the raw activations, so the next
+    // layer receives a stable distribution (mean ≈ 0, var ≈ 1).
     current = prop;
   }
-  return totalGoodness / (net.layers.length || 1);
+  // Average normalised goodness across layers, then map to (0, 1) with a
+  // sigmoid centred at 0.5 (the typical fresh-network mean squared activation).
+  // This keeps the output bounded and gives meaningful spread:
+  //   avgNorm = 0.3  →  sigmoid(−0.8) ≈ 0.31  (network finds input unlikely)
+  //   avgNorm = 0.5  →  sigmoid( 0.0) = 0.50  (neutral / untrained)
+  //   avgNorm = 0.7  →  sigmoid(+0.8) ≈ 0.69  (network prefers this input)
+  //   avgNorm = 1.0  →  sigmoid(+2.0) ≈ 0.88  (strongly preferred)
+  const avgNorm = totalNormGoodness / net.layers.length;
+  return sigmoid(4 * (avgNorm - 0.5));
 }
 
 export function getActivations(net: FFNetworkState, input: number[]): number[] {
