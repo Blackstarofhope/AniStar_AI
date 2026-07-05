@@ -710,6 +710,16 @@ export async function processFeedback(
   trainingEmbeddingOverride?: number[]
 ): Promise<{ epoch: number; goodness: number; justUnlocked: boolean }> {
   const eng = await getEngine(userId);
+  // NOTE: isTraining is a status flag for getAIStatus() only — it is never
+  // checked as a guard anywhere, so it does NOT prevent concurrent calls to
+  // processFeedback for the same user (e.g. a watchstate hook firing while
+  // the user also submits an explicit rating). Both calls share the same
+  // mutable `eng` object and can interleave across the awaits below,
+  // including inside checkNeurogenesis (concurrent grow/prune decisions on a
+  // stale snapshot) and trainStep (out-of-order weight updates). If this
+  // surfaces, fix by serializing per-user work, e.g. keep a
+  // Promise<void> "queue tail" per userId in the engines map and chain each
+  // processFeedback call onto it instead of relying on isTraining.
   eng.isTraining = true;
 
   try {
@@ -813,6 +823,15 @@ export async function processFeedback(
     };
     addToReplay(eng.ewc, replayEntry);
 
+    // NOTE: no dedup by animeId here — unlike user_ratings in the DB (which
+    // upserts on [userId, malId]), this in-memory array will hold a separate
+    // entry per processFeedback call for the same anime (e.g. a thumbs-up
+    // followed later by a watchstate "completed" event). buildUserPreferenceVector
+    // sums every entry, so the same anime's embedding can be double-counted
+    // with conflicting weights, and it also skews hard-negative/positive
+    // sampling. The FIFO cap below evicts the oldest entry, not necessarily
+    // the stale duplicate. If this surfaces, fix by removing any existing
+    // entry with the same animeId before pushing the new one.
     eng.ratings.push({ animeId: malId, embedding: trainingRaw, rating, timestamp: Date.now() });
     if (eng.ratings.length > 1000) eng.ratings.shift();
 
@@ -822,9 +841,26 @@ export async function processFeedback(
 
     // Persist rating to user_ratings table (T001: this call was missing).
     // user_ratings is the source of truth for the Path 3 unlock check below.
-    storage.saveRating(userId, malId, rating).catch((e) =>
-      console.warn(`[AI] saveRating failed mal_id=${malId}:`, e instanceof Error ? e.message : e)
-    );
+    // MUST be awaited: it was previously fire-and-forget, which raced against
+    // getUserRatings() below — storage.withRetry() backs off up to 500ms*attempt
+    // on connection errors, so the unlock check could read the table before
+    // this insert committed, undercounting ratings and delaying the unlock.
+    try {
+      await storage.saveRating(userId, malId, rating);
+    } catch (e) {
+      // The FF network already trained on this rating (weights updated above,
+      // added to eng.ratings/replay buffer) and cannot be rolled back, so we
+      // don't fail the whole request. But this rating is now permanently
+      // missing from user_ratings — model state and the DB are inconsistent,
+      // and the Path 3 unlock counter will legitimately undercount it. Logged
+      // at error level (not warn) so this isn't silently lost in production.
+      // If this surfaces repeatedly, consider an outbox/retry-queue for
+      // failed rating writes instead of a single best-effort attempt.
+      console.error(
+        `[AI] saveRating FAILED after retries for user=${userId} mal_id=${malId} — rating trained into model but NOT persisted to user_ratings:`,
+        e instanceof Error ? e.message : e
+      );
+    }
 
     await persistEngine(userId, eng);
 
