@@ -39,6 +39,14 @@ author = "agent"
 task = "workflow.run"
 args = "Start dev servers"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "test"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "typecheck"
+
 [[workflows.workflow]]
 name = "Start dev servers"
 author = "agent"
@@ -48,4 +56,26 @@ task = "shell.exec"
 args = "npm run all:dev"
 waitForPort = 8081
 ensurePreviewReachable = "/status"
+
+[[workflows.workflow]]
+name = "test"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "typecheck"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx tsc --noEmit"
+
+[workflows.workflow.metadata]
+isValidation = true
 

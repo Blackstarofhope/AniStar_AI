@@ -10,5 +10,5 @@
     "types": ["node"]
   },
   "include": ["**/*.ts", "**/*.tsx", "server/types/**/*.d.ts"],
-  "exclude": ["node_modules", "build", "dist", "**/*.test.ts"],
+  "exclude": ["node_modules", "build", "dist", "**/*.test.ts", "vitest.config.ts"],
 }

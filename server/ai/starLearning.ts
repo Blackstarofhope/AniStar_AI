@@ -14,6 +14,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { normalize } from "./matrix.js";
+import { aiLog } from "./aiLog.js";
 import {
   createNetwork, trainStep, infer, applyEWCCorrection,
   type FFNetworkState,
@@ -21,6 +22,7 @@ import {
 import { createEWCState, computeFisher, type EWCState } from "./ewc.js";
 import { GENRE_KEYWORD_MAP, MOOD_MAP } from "./starPersonality.js";
 import { encodeText, loadCLIP, isLoaded as clipIsLoaded } from "./clipEncoder.js";
+import { storage } from "../storage.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -89,6 +91,7 @@ export interface SelectionResult {
 
 let _state: StarLearningState | null = null;
 let _ready = false;
+let _version = 0;
 
 // ---------------------------------------------------------------------------
 // Text embedding
@@ -345,15 +348,45 @@ function bootstrapTrain(state: StarLearningState): void {
 // Persistence
 // ---------------------------------------------------------------------------
 
-function persistState(state: StarLearningState): void {
+/**
+ * Save the current in-memory state to the DB using optimistic versioning.
+ * On a version conflict (another instance saved first), reloads the DB's
+ * copy into `_state` and drops the local delta — acceptable for this
+ * soft/best-effort chat model, but logged so it's visible if it happens often.
+ */
+async function persistState(state: StarLearningState): Promise<void> {
   try {
-    fs.writeFileSync(STAR_LEARNING_PATH, JSON.stringify(state), "utf-8");
+    const result = await storage.saveStarLearningStateVersioned(state, _version);
+    if (result.ok) {
+      _version = result.newVersion;
+      return;
+    }
+    aiLog("warn", "star_state_conflict", {
+      localVersion: _version,
+      detail: "reloading from DB, local delta dropped",
+    });
+    const fresh = await storage.loadStarLearningStateVersioned();
+    if (fresh) {
+      const s = normalizeLoadedState(fresh.json as StarLearningState);
+      if (s) {
+        _state = s;
+        _version = fresh.version;
+      }
+    }
   } catch (e) {
-    console.warn("[Star] Failed to save learning state:", e);
+    aiLog("error", "star_state_save_failed", { message: e instanceof Error ? e.message : String(e) });
   }
 }
 
-function loadPersistedState(): StarLearningState | null {
+function normalizeLoadedState(s: StarLearningState): StarLearningState | null {
+  const savedInputDim = s?.network?.layers?.[0]?.weights?.[0]?.length ?? 0;
+  if (!s?.bootstrapped || savedInputDim !== PAIR_DIM) return null;
+  if (!s.chatReplay) s.chatReplay = [];
+  if (!s.responsePool) s.responsePool = buildResponsePool();
+  return s;
+}
+
+function loadPersistedFile(): StarLearningState | null {
   try {
     if (!fs.existsSync(STAR_LEARNING_PATH)) return null;
     const raw = fs.readFileSync(STAR_LEARNING_PATH, "utf-8");
@@ -377,22 +410,47 @@ function loadPersistedState(): StarLearningState | null {
  * mappings in starPersonality.ts.  Call once at server startup.
  */
 export async function initStarLearning(): Promise<void> {
-  const existing = loadPersistedState();
-  // Discard saved state if network input dim doesn't match PAIR_DIM (architecture changed)
-  const savedInputDim = existing?.network?.layers?.[0]?.weights?.[0]?.length ?? 0;
-  if (existing?.bootstrapped && savedInputDim === PAIR_DIM) {
-    _state = existing;
+  // The DB is the single source of truth. The legacy per-instance file
+  // (ai-star-learning-state.json) is only consulted below as a one-time
+  // migration path when no DB row exists yet.
+  try {
+    const dbState = await storage.loadStarLearningStateVersioned();
+    if (dbState) {
+      const hydrated = normalizeLoadedState(dbState.json as StarLearningState);
+      if (hydrated) {
+        _state = hydrated;
+        _version = dbState.version;
+        _ready = true;
+        console.log(
+          `[Star] Loaded learning state from DB (v${dbState.version}) — epoch ${hydrated.network.epoch}, ` +
+          `${hydrated.responsePool.length} pool entries`
+        );
+        upgradePoolToCLIP().catch(() => {});
+        return;
+      }
+      console.log("[Star] DB learning state dim mismatch — re-bootstrapping.");
+    }
+  } catch (e) {
+    console.warn("[Star] Failed to load learning state from DB:", e instanceof Error ? e.message : e);
+  }
+
+  // No usable DB row yet — fall back to the legacy file once and migrate it.
+  const existing = loadPersistedFile();
+  const hydratedFile = existing ? normalizeLoadedState(existing) : null;
+  if (hydratedFile) {
+    _state = hydratedFile;
     _ready = true;
+    await persistState(hydratedFile);
     console.log(
-      `[Star] Loaded learning state — epoch ${existing.network.epoch}, ` +
-      `${existing.responsePool.length} pool entries`
+      `[Star] Migrated legacy file-based learning state into DB (v${_version}) — epoch ${hydratedFile.network.epoch}, ` +
+      `${hydratedFile.responsePool.length} pool entries`
     );
     upgradePoolToCLIP().catch(() => {});
     return;
   }
 
-  if (existing && savedInputDim !== PAIR_DIM) {
-    console.log(`[Star] Saved state dim mismatch (${savedInputDim} vs ${PAIR_DIM}) — re-bootstrapping.`);
+  if (existing) {
+    console.log("[Star] Legacy file dim mismatch — re-bootstrapping.");
   }
 
   console.log("[Star] Bootstrapping learning system from keyword map...");
@@ -406,10 +464,10 @@ export async function initStarLearning(): Promise<void> {
 
   bootstrapTrain(fresh);
   fresh.bootstrapped = true;
-  persistState(fresh);
 
   _state = fresh;
   _ready = true;
+  await persistState(fresh);
   console.log("[Star] Learning system ready.");
   upgradePoolToCLIP().catch(() => {});
 }
@@ -445,7 +503,7 @@ export async function upgradePoolToCLIP(): Promise<void> {
     }
 
     if (upgraded > 0) {
-      persistState(_state);
+      await persistState(_state);
       console.log(`[Star] Pool upgraded to CLIP embeddings (${upgraded} entries).`);
     }
   } catch (e) {
@@ -579,12 +637,12 @@ export async function recordChatFeedback(
   );
   if (!entry) return;
   recordInteraction(inputEmb, entry.embedding, isPositive, isPositive ? 1.0 : 0.8);
-  persistState(_state);
+  await persistState(_state);
 }
 
-/** Persist the current state to disk. */
-export function saveStarLearning(): void {
-  if (_state) persistState(_state);
+/** Persist the current state to the DB. */
+export async function saveStarLearning(): Promise<void> {
+  if (_state) await persistState(_state);
 }
 
 /** Raw state accessor — used by modelStore for unified serialisation. */

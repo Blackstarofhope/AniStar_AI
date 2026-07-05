@@ -3,6 +3,24 @@ import { pgTable, text, integer, real, serial, timestamp, jsonb, unique, primary
 export const userEngineState = pgTable("user_engine_state", {
   userId: text("user_id").primaryKey(),
   engineJson: jsonb("engine_json").notNull(),
+  // Optimistic-concurrency counter. Multi-instance deployments can have two
+  // instances each holding their own in-memory copy of this user's engine;
+  // writes are conditional on `version` matching what the writer last read,
+  // so a stale writer gets a conflict instead of silently clobbering newer
+  // work. See saveEngineStateVersioned in server/storage.ts.
+  version: integer("version").notNull().default(0),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Star's chat-personalization learning state (server/ai/starLearning.ts) is a
+// single global singleton (not per-user), previously persisted only to a
+// per-instance-ephemeral file (ai-star-learning-state.json). A single fixed
+// row (id=1) holds it in Postgres instead, with the same optimistic-versioning
+// pattern as userEngineState so multi-instance writes don't clobber each other.
+export const starLearningState = pgTable("star_learning_state", {
+  id: integer("id").primaryKey().default(1),
+  stateJson: jsonb("state_json").notNull(),
+  version: integer("version").notNull().default(0),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 

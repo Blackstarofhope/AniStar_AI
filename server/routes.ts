@@ -5,7 +5,7 @@ import bcrypt from "bcryptjs";
 import { storage, testConnection } from "./storage.js";
 import {
   getRecommendations, getThreeLaneRecommendations, processFeedback, getAIStatus, verifyAnimeArtwork,
-  restTrain, hasRestTrained, addAnimeEmbeddings,
+  restTrain, hasRestTrained, hasRestTrainedFresh, addAnimeEmbeddings,
 } from "./ai/recommendEngine.js";
 import { getSchedule, getSeasonalAnime, getAnimeDetails, getAllCurrentAnime, initAnimeData, getSearchedCacheEntries, searchAndAddAnime } from "./ai/animeData.js";
 import { validateImageUrl } from "./ai/visionVerifier.js";
@@ -1094,7 +1094,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   initAnimeData().catch((e) => console.error("[AnimeData] Init failed:", e));
 
   setTimeout(() => {
-    hasRestTrained("default").then((trained) => {
+    // Bypass the in-memory engine cache here (hasRestTrainedFresh, not
+    // hasRestTrained) — this fires 5s after boot, and another request may
+    // have already warmed the cache with a since-stale "not trained" engine.
+    // A fresh DB read minimizes (but, per multi-instance timing, can't fully
+    // eliminate) the chance of two instances both starting the expensive
+    // full rest-train pass; restTrainLocked()'s versioned save still backstops
+    // correctness if that race is lost.
+    hasRestTrainedFresh("default").then((trained) => {
       if (!trained) {
         console.log("[Star] No prior rest training found — starting background base-knowledge pass...");
         restTrain("default").catch((e) => console.error("[Star] Auto rest-train failed:", e));

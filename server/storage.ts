@@ -3,7 +3,7 @@ import { Pool } from "pg";
 import { randomUUID } from "crypto";
 import { and, eq, inArray, isNotNull, lt, sql } from "drizzle-orm";
 import {
-  userEngineState, animeSearched, animeEmbeddings, vibeProfiles,
+  userEngineState, starLearningState, animeSearched, animeEmbeddings, vibeProfiles,
   userRatings, animeDiscovery, userProfiles,
   userBanList, userWatchState, userPreferences, userChatUsage,
   userOnboarding, userCharacterRatings, animeReasons, userPersonalitySignals,
@@ -39,6 +39,23 @@ export async function testConnection(): Promise<void> {
 export interface IStorage {
   saveEngineState(userId: string, json: object): Promise<void>;
   loadEngineState(userId: string): Promise<object | null>;
+
+  // Optimistic-concurrency variants used for cross-instance-safe writes.
+  // saveEngineStateVersioned only applies the write if the row's current
+  // version still matches `expectedVersion` (or no row exists yet, treated
+  // as version 0); on success the row's version is incremented and returned.
+  saveEngineStateVersioned(
+    userId: string,
+    json: object,
+    expectedVersion: number
+  ): Promise<{ ok: true; newVersion: number } | { ok: false }>;
+  loadEngineStateVersioned(userId: string): Promise<{ json: object; version: number } | null>;
+
+  saveStarLearningStateVersioned(
+    json: object,
+    expectedVersion: number
+  ): Promise<{ ok: true; newVersion: number } | { ok: false }>;
+  loadStarLearningStateVersioned(): Promise<{ json: object; version: number } | null>;
 
   saveSearchedAnime(malId: number, data: object): Promise<void>;
   getAllSearchedAnime(): Promise<{ malId: number; data: object }[]>;
@@ -160,6 +177,97 @@ class PostgresStorage implements IStorage {
         .from(userEngineState)
         .where(eq(userEngineState.userId, userId))
         .then((rows) => (rows[0]?.engineJson as object) ?? null)
+    );
+  }
+
+  // Single round-trip conditional upsert: if no row exists yet, the INSERT
+  // path succeeds unconditionally (equivalent to "expected version 0"). If a
+  // row exists, the UPDATE only applies (and increments version) when the
+  // row's current version still equals `expectedVersion`; otherwise the
+  // ON CONFLICT DO UPDATE ... WHERE guard suppresses the update and
+  // .returning() yields zero rows, which we treat as a version conflict —
+  // some other instance/request wrote first and this caller's in-memory
+  // state is stale.
+  //
+  // IMPORTANT: the insert path writes version 1 (not 0). If it wrote 0, a
+  // real first-ever row would be indistinguishable from "no row exists" —
+  // a second concurrent first-writer (also passing expectedVersion=0) would
+  // match `setWhere: version = 0` against that real row and silently
+  // clobber it instead of conflicting. Starting real rows at version 1
+  // means expectedVersion=0 only ever matches "no row" (insert succeeds)
+  // and never matches an existing row (update guard can't hit).
+  async saveEngineStateVersioned(
+    userId: string,
+    json: object,
+    expectedVersion: number
+  ): Promise<{ ok: true; newVersion: number } | { ok: false }> {
+    return this.withRetry(async () => {
+      const rows = await db
+        .insert(userEngineState)
+        .values({ userId, engineJson: json, version: 1, updatedAt: new Date() })
+        .onConflictDoUpdate({
+          target: userEngineState.userId,
+          set: {
+            engineJson: json,
+            version: sql`${userEngineState.version} + 1`,
+            updatedAt: new Date(),
+          },
+          setWhere: eq(userEngineState.version, expectedVersion),
+        })
+        .returning({ version: userEngineState.version });
+
+      if (rows.length === 0) return { ok: false };
+      return { ok: true, newVersion: rows[0].version };
+    });
+  }
+
+  async loadEngineStateVersioned(userId: string): Promise<{ json: object; version: number } | null> {
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(userEngineState)
+        .where(eq(userEngineState.userId, userId))
+        .then((rows) =>
+          rows[0] ? { json: rows[0].engineJson as object, version: rows[0].version } : null
+        )
+    );
+  }
+
+  // See saveEngineStateVersioned() above for why the insert path writes
+  // version 1, not 0 — same first-writer race, same fix.
+  async saveStarLearningStateVersioned(
+    json: object,
+    expectedVersion: number
+  ): Promise<{ ok: true; newVersion: number } | { ok: false }> {
+    return this.withRetry(async () => {
+      const rows = await db
+        .insert(starLearningState)
+        .values({ id: 1, stateJson: json, version: 1, updatedAt: new Date() })
+        .onConflictDoUpdate({
+          target: starLearningState.id,
+          set: {
+            stateJson: json,
+            version: sql`${starLearningState.version} + 1`,
+            updatedAt: new Date(),
+          },
+          setWhere: eq(starLearningState.version, expectedVersion),
+        })
+        .returning({ version: starLearningState.version });
+
+      if (rows.length === 0) return { ok: false };
+      return { ok: true, newVersion: rows[0].version };
+    });
+  }
+
+  async loadStarLearningStateVersioned(): Promise<{ json: object; version: number } | null> {
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(starLearningState)
+        .where(eq(starLearningState.id, 1))
+        .then((rows) =>
+          rows[0] ? { json: rows[0].stateJson as object, version: rows[0].version } : null
+        )
     );
   }
 

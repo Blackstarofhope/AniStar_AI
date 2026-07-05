@@ -22,12 +22,11 @@ import {
 } from "./textEmbedder.js";
 import { loadCLIP } from "./clipEncoder.js";
 import { verifyArtwork, type VerificationResult } from "./visionVerifier.js";
-import {
-  loadModelState, saveModelState, type ModelState
-} from "./modelStore.js";
+import { loadModelState } from "./modelStore.js";
 import { cosineSim, normalize } from "./matrix.js";
 import { getAllCurrentAnime, type AnimeScheduleItem } from "./animeData.js";
 import { generateVibeProfile, getVibeProfileFromCache } from "./vibeProfiler.js";
+import { aiLog } from "./aiLog.js";
 
 const LAYER_SIZES = [EMBEDDING_DIM, 256, 128, 64];
 const KURAMOTO_SIZE = 256;
@@ -77,6 +76,11 @@ interface EngineState {
   ratings: { animeId: number; embedding: number[]; rating: number; timestamp: number }[];
   isTraining: boolean;
   restTrainedAt: number | null;
+  // Optimistic-concurrency counter mirroring userEngineState.version in the
+  // DB. Tracks the version this in-memory copy was last loaded/saved at, so
+  // persistEngine can detect when another instance (or another request on
+  // this instance, absent the write queue below) has saved newer state first.
+  version: number;
 }
 
 const engines = new Map<string, EngineState>();
@@ -85,6 +89,33 @@ const engineInitPromises = new Map<string, Promise<EngineState>>();
 const MAX_USER_ENGINES = 5;
 const INACTIVITY_MS = 5 * 60 * 1000; // 5 minutes
 let clipPreloadDone = false;
+
+// ---------------------------------------------------------------------------
+// Per-user write queue
+// Optimistic versioning assumes at most one in-flight writer per (instance,
+// user): two concurrent calls sharing the same in-memory EngineState object
+// would otherwise interleave mutations and both read the same stale
+// eng.version, spuriously conflicting with EACH OTHER (not just with other
+// instances) on save. This queue serializes state-mutating operations
+// (processFeedback, restTrain) per user on this instance. It does NOT protect
+// against concurrent writers on different instances — the version check
+// itself (in persistEngine/storage.saveEngineStateVersioned) is what handles
+// that case.
+// ---------------------------------------------------------------------------
+const userWriteQueues = new Map<string, Promise<void>>();
+
+function enqueueUserWork<T>(userId: string, work: () => Promise<T>): Promise<T> {
+  const prevTail = userWriteQueues.get(userId) ?? Promise.resolve();
+  const resultPromise = prevTail.then(work, work);
+  userWriteQueues.set(
+    userId,
+    resultPromise.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+  return resultPromise;
+}
 
 // ---------------------------------------------------------------------------
 // Shared anime embedding cache
@@ -154,6 +185,45 @@ function seedSharedEmbeddingsFromLegacy(
   }
 }
 
+interface PersistedEngineJson {
+  network: FFNetworkState;
+  kuramoto: KuramotoState;
+  neurogenesis: NeurogenesisState;
+  ewc: EWCState;
+  ratings: { animeId: number; embedding: number[]; rating: number; timestamp: number }[];
+  allAnimeEmbeddings?: { animeId: number; embedding: number[] }[];
+  restTrainedAt?: number | null;
+}
+
+// Shared deserialization for both the DB path and the legacy-file migration
+// path below, so the two stay in sync. Returns null if the persisted network
+// shape doesn't match the current architecture (e.g. after a LAYER_SIZES
+// change), signaling the caller should fall back to a fresh engine.
+function hydrateEngineState(s: PersistedEngineJson, version: number): EngineState | null {
+  const firstHiddenSize = s.network?.layers?.[0]?.biases?.length ?? 0;
+  if (firstHiddenSize !== LAYER_SIZES[1]) return null;
+
+  const kura = s.kuramoto;
+  if (!kura.vibePhases || kura.vibePhases.length !== kura.textPhases.length) {
+    kura.vibePhases = Array.from(
+      { length: kura.textPhases.length },
+      () => Math.random() * 2 * Math.PI
+    );
+  }
+  seedSharedEmbeddingsFromLegacy(s.allAnimeEmbeddings);
+
+  return {
+    network: deserializeNetwork(s.network),
+    kuramoto: kura,
+    neurogenesis: s.neurogenesis,
+    ewc: s.ewc,
+    ratings: s.ratings || [],
+    isTraining: false,
+    restTrainedAt: s.restTrainedAt ?? null,
+    version,
+  };
+}
+
 async function initEngine(userId: string): Promise<EngineState> {
   if (!clipPreloadDone) {
     clipPreloadDone = true;
@@ -162,75 +232,56 @@ async function initEngine(userId: string): Promise<EngineState> {
 
   await ensureSharedEmbeddingsLoaded();
 
-  // For "default": try file-based first for backward compatibility
-  if (userId === "default") {
-    const saved = loadModelState();
-    if (saved) {
-      const firstHiddenSize = saved.network.layers[0]?.biases?.length ?? 0;
-      const expectedHiddenSize = LAYER_SIZES[1];
-      if (firstHiddenSize === expectedHiddenSize) {
-        seedSharedEmbeddingsFromLegacy(saved.allAnimeEmbeddings);
-        const kura = saved.kuramoto;
-        if (!kura.vibePhases || kura.vibePhases.length !== kura.textPhases.length) {
-          kura.vibePhases = Array.from(
-            { length: kura.textPhases.length },
-            () => Math.random() * 2 * Math.PI
-          );
-        }
-        return {
-          network: deserializeNetwork(saved.network),
-          kuramoto: kura,
-          neurogenesis: saved.neurogenesis,
-          ewc: saved.ewc,
-          ratings: saved.ratings || [],
-          isTraining: false,
-          restTrainedAt: saved.restTrainedAt ?? null,
-        };
-      } else {
-        console.log(
-          `[AI] Saved network dim mismatch (firstHidden=${firstHiddenSize} vs expected ${LAYER_SIZES[1]}) — trying DB.`
-        );
-      }
-    }
-  }
-
-  // Try DB for all users
+  // The DB is the single source of truth for every user, including
+  // "default". The legacy per-instance file (ai-model-state.json) is only
+  // consulted below as a one-time migration path when no DB row exists yet.
   try {
-    const dbState = await storage.loadEngineState(userId);
+    const dbState = await storage.loadEngineStateVersioned(userId);
     if (dbState) {
-      const s = dbState as {
-        network: FFNetworkState;
-        kuramoto: KuramotoState;
-        neurogenesis: NeurogenesisState;
-        ewc: EWCState;
-        ratings: { animeId: number; embedding: number[]; rating: number; timestamp: number }[];
-        allAnimeEmbeddings?: { animeId: number; embedding: number[] }[];
-        restTrainedAt?: number | null;
-      };
-      const firstHiddenSize = s.network?.layers?.[0]?.biases?.length ?? 0;
-      if (firstHiddenSize === LAYER_SIZES[1]) {
-        const kura = s.kuramoto;
-        if (!kura.vibePhases || kura.vibePhases.length !== kura.textPhases.length) {
-          kura.vibePhases = Array.from(
-            { length: kura.textPhases.length },
-            () => Math.random() * 2 * Math.PI
-          );
-        }
-        seedSharedEmbeddingsFromLegacy(s.allAnimeEmbeddings);
-        console.log(`[AI] Loaded engine for user "${userId}" from DB.`);
-        return {
-          network: deserializeNetwork(s.network),
-          kuramoto: kura,
-          neurogenesis: s.neurogenesis,
-          ewc: s.ewc,
-          ratings: s.ratings || [],
-          isTraining: false,
-          restTrainedAt: s.restTrainedAt ?? null,
-        };
+      const hydrated = hydrateEngineState(dbState.json as PersistedEngineJson, dbState.version);
+      if (hydrated) {
+        console.log(`[AI] Loaded engine for user "${userId}" from DB (v${dbState.version}).`);
+        return hydrated;
       }
+      console.log(`[AI] DB engine state for "${userId}" has a network dim mismatch — ignoring.`);
     }
   } catch (e) {
     console.warn(`[AI] Failed to load engine from DB for "${userId}":`, e instanceof Error ? e.message : e);
+  }
+
+  // No usable DB row yet. For "default" only, fall back to the legacy file
+  // once and migrate it into the DB so this instance and every other
+  // instance load through the DB path above from now on.
+  if (userId === "default") {
+    const saved = loadModelState();
+    if (saved) {
+      const hydrated = hydrateEngineState(saved as unknown as PersistedEngineJson, 0);
+      if (hydrated) {
+        const migrated = await persistEngine(userId, hydrated);
+        if (migrated) {
+          console.log(`[AI] Migrated legacy file-based engine state for "default" into DB (v${hydrated.version}).`);
+          return hydrated;
+        }
+        // Another writer (another instance, or a concurrent request) created
+        // the DB row first — re-read the authoritative copy instead of using
+        // our now-stale file-based snapshot.
+        console.warn(`[AI] Legacy file migration for "default" hit a version conflict — reloading from DB.`);
+        try {
+          const fresh = await storage.loadEngineStateVersioned(userId);
+          if (fresh) {
+            const rehydrated = hydrateEngineState(fresh.json as PersistedEngineJson, fresh.version);
+            if (rehydrated) return rehydrated;
+          }
+        } catch (e) {
+          console.warn(
+            `[AI] Failed to re-load engine from DB for "default" after migration conflict:`,
+            e instanceof Error ? e.message : e
+          );
+        }
+        return hydrated;
+      }
+      console.log(`[AI] Legacy file network dim mismatch — starting fresh for "default".`);
+    }
   }
 
   return {
@@ -241,6 +292,7 @@ async function initEngine(userId: string): Promise<EngineState> {
     ratings: [],
     isTraining: false,
     restTrainedAt: null,
+    version: 0,
   };
 }
 
@@ -263,9 +315,9 @@ async function getEngine(userId: string): Promise<EngineState> {
         if (oldestKey) {
           const evicted = engines.get(oldestKey);
           if (evicted) {
-            persistEngine(oldestKey, evicted).catch((e) =>
-              console.error(`[AI] Failed to persist evicted engine for "${oldestKey}":`, e instanceof Error ? e.message : e)
-            );
+            // persistEngine never throws (see its definition) — failures and
+            // version conflicts are logged internally.
+            persistEngine(oldestKey, evicted);
           }
           engines.delete(oldestKey);
           engineAccessTime.delete(oldestKey);
@@ -283,7 +335,15 @@ async function getEngine(userId: string): Promise<EngineState> {
   return initPromise;
 }
 
-async function persistEngine(userId: string, eng: EngineState): Promise<void> {
+// Conditionally persists `eng` to the DB using optimistic-concurrency
+// versioning: the write only applies if `eng.version` still matches the
+// row's current version in the DB. On success, eng.version is bumped in
+// place to match the new row version and this resolves true. On a version
+// conflict (another writer — another instance, or the same instance without
+// going through the write queue — saved first) or any other failure, this
+// resolves false and leaves `eng` untouched; the in-memory copy should then
+// be treated as stale by the caller. This function never throws.
+async function persistEngine(userId: string, eng: EngineState): Promise<boolean> {
   const json = {
     version: 2,
     network: serializeNetwork(eng.network),
@@ -294,47 +354,36 @@ async function persistEngine(userId: string, eng: EngineState): Promise<void> {
     restTrainedAt: eng.restTrainedAt ?? null,
   };
 
-  // MUST be awaited: callers of persistEngine() rely on the save having
-  // actually completed (e.g. before responding to the client, or before the
-  // engine is evicted from memory). Previously this was fire-and-forget, so
-  // "await persistEngine(...)" was misleading — on a slow or throttled
-  // instance (e.g. Cloud Run pausing CPU shortly after the response is
-  // sent), the write could be silently dropped before it ever reached the DB.
+  let saved = false;
   try {
-    await storage.saveEngineState(userId, json);
+    const result = await storage.saveEngineStateVersioned(userId, json, eng.version);
+    if (result.ok) {
+      eng.version = result.newVersion;
+      saved = true;
+    } else {
+      aiLog("warn", "engine_save_conflict", { userId, localVersion: eng.version });
+    }
   } catch (e) {
-    console.error(
-      `[AI] Failed to save engine state to DB for "${userId}" — trained state for this session may be lost:`,
-      e instanceof Error ? e.message : e
-    );
+    aiLog("error", "engine_save_failed", { userId, message: e instanceof Error ? e.message : String(e) });
   }
 
-  // For "default", also keep file-based for backward compatibility
-  if (userId === "default") {
-    const state: ModelState = {
-      version: 2,
-      network: deserializeNetwork(serializeNetwork(eng.network) as FFNetworkState),
-      kuramoto: eng.kuramoto,
-      neurogenesis: eng.neurogenesis,
-      ewc: eng.ewc,
-      ratings: eng.ratings,
-      restTrainedAt: eng.restTrainedAt ?? undefined,
-      savedAt: new Date().toISOString(),
-    };
-    saveModelState(state);
-  }
+  // "default" is now DB-first end-to-end (see initEngine's one-time file
+  // migration) — the legacy ai-model-state.json file is no longer written.
+
+  return saved;
 }
 
-// Inactivity eviction: persist and remove engines idle for > 5 minutes
+// Inactivity eviction: persist and remove engines idle for > 5 minutes.
+// A version conflict here just means another writer already saved newer
+// data for this user — the evicted in-memory copy is stale, so dropping it
+// without retrying is correct (there's nothing new to contribute).
 setInterval(() => {
   const now = Date.now();
   for (const [userId, lastAccess] of engineAccessTime) {
     if (now - lastAccess > INACTIVITY_MS) {
       const eng = engines.get(userId);
       if (eng) {
-        persistEngine(userId, eng).catch((e) =>
-          console.error(`[AI] Failed to persist idle-evicted engine for "${userId}":`, e instanceof Error ? e.message : e)
-        );
+        persistEngine(userId, eng);
       }
       engines.delete(userId);
       engineAccessTime.delete(userId);
@@ -782,134 +831,173 @@ export async function processFeedback(
   userId = "default",
   trainingEmbeddingOverride?: number[]
 ): Promise<{ epoch: number; goodness: number; justUnlocked: boolean }> {
-  const eng = await getEngine(userId);
-  // NOTE: isTraining is a status flag for getAIStatus() only — it is never
-  // checked as a guard anywhere, so it does NOT prevent concurrent calls to
-  // processFeedback for the same user (e.g. a watchstate hook firing while
-  // the user also submits an explicit rating). Both calls share the same
-  // mutable `eng` object and can interleave across the awaits below,
-  // including inside checkNeurogenesis (concurrent grow/prune decisions on a
-  // stale snapshot) and trainStep (out-of-order weight updates). If this
-  // surfaces, fix by serializing per-user work, e.g. keep a
-  // Promise<void> "queue tail" per userId in the engines map and chain each
-  // processFeedback call onto it instead of relying on isTraining.
+  // Serialized per-user: see enqueueUserWork above for why this is required
+  // on top of the version check itself.
+  return enqueueUserWork(userId, () =>
+    processFeedbackLocked(malId, rating, userId, trainingEmbeddingOverride)
+  );
+}
+
+async function processFeedbackLocked(
+  malId: number,
+  rating: number,
+  userId: string,
+  trainingEmbeddingOverride: number[] | undefined
+): Promise<{ epoch: number; goodness: number; justUnlocked: boolean }> {
+  const MAX_ATTEMPTS = 3;
+  let eng = await getEngine(userId);
   eng.isTraining = true;
 
+  let avgGoodness = 0;
+  let saved = false;
+
   try {
-    // Always resolve the canonical anime embedding from the shared cache.
-    let animeEmbedding = getSharedEmbedding(malId);
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      // Always resolve the canonical anime embedding from the shared cache.
+      let animeEmbedding = getSharedEmbedding(malId);
 
-    if (!animeEmbedding) {
-      const animeList = await getAllCurrentAnime();
-      const anime = animeList.find((a) => a.mal_id === malId);
-      if (anime) {
-        animeEmbedding = await embedAnimeWithVibeFallback(anime as AnimeInfo);
-        setSharedEmbedding(malId, animeEmbedding);
-      } else {
-        const vec = new Array(EMBEDDING_DIM).fill(0.1);
-        animeEmbedding = normalize(vec);
-      }
-    }
-
-    // trainingRaw: what actually shapes the user preference vector.
-    // When a caller provides an override (e.g. character trait or reason blend),
-    // that richer signal is used for training; otherwise fall back to the anime embedding.
-    const trainingRaw = trainingEmbeddingOverride ?? animeEmbedding;
-
-    // Inline phase-modulation helper — avoids repeating the three-step blend.
-    const modulate = (emb: number[]): number[] => {
-      const t = phaseModulatedEmbedding(emb, eng.kuramoto.textPhases);
-      const v = phaseModulatedVibeEmbedding(emb, eng.kuramoto);
-      return normalize(t.map((x, i) => (x + v[i]) / 2));
-    };
-
-    const finalEmbedding = modulate(trainingRaw);
-
-    const replaySamples = sampleReplay(eng.ewc, 4);
-    const trainingBatch: { embedding: number[]; rating: number }[] = [
-      { embedding: finalEmbedding, rating },
-      ...replaySamples.map((r) => ({
-        embedding: modulate(r.embedding),
-        rating: r.rating,
-      })),
-    ];
-
-    let totalGoodness = 0;
-    for (const sample of trainingBatch) {
-      const liked = sample.rating > 0.5;
-
-      let positive: number[];
-      let negative: number[];
-
-      if (liked) {
-        positive = sample.embedding;
-        // Prefer a real disliked embedding as the hard negative so the
-        // FF decision boundary aligns with actual content the user rejected.
-        // Fall back to corrupted noise when no low-rated history exists yet.
-        const rawHardNeg = sampleHardNegative(eng.ratings, malId);
-        negative = rawHardNeg
-          ? modulate(rawHardNeg)
-          : createCorruptedInput(sample.embedding);
-      } else {
-        // Prefer a real liked embedding as the hard positive.
-        const rawHardPos = sampleHardPositive(eng.ratings, malId);
-        positive = rawHardPos
-          ? modulate(rawHardPos)
-          : createCorruptedInput(sample.embedding);
-        negative = sample.embedding;
+      if (!animeEmbedding) {
+        const animeList = await getAllCurrentAnime();
+        const anime = animeList.find((a) => a.mal_id === malId);
+        if (anime) {
+          animeEmbedding = await embedAnimeWithVibeFallback(anime as AnimeInfo);
+          setSharedEmbedding(malId, animeEmbedding);
+        } else {
+          const vec = new Array(EMBEDDING_DIM).fill(0.1);
+          animeEmbedding = normalize(vec);
+        }
       }
 
-      const g = trainStep(eng.network, positive, negative);
-      totalGoodness += g;
+      // trainingRaw: what actually shapes the user preference vector.
+      // When a caller provides an override (e.g. character trait or reason blend),
+      // that richer signal is used for training; otherwise fall back to the anime embedding.
+      const trainingRaw = trainingEmbeddingOverride ?? animeEmbedding;
 
-      if (eng.ewc.fisher.length > 0) {
-        applyEWCCorrection(
-          eng.network,
-          eng.ewc.fisher,
-          eng.ewc.optimalWeights,
-          eng.ewc.optimalBiases,
-          80
-        );
+      // Inline phase-modulation helper — avoids repeating the three-step blend.
+      const modulate = (emb: number[]): number[] => {
+        const t = phaseModulatedEmbedding(emb, eng.kuramoto.textPhases);
+        const v = phaseModulatedVibeEmbedding(emb, eng.kuramoto);
+        return normalize(t.map((x, i) => (x + v[i]) / 2));
+      };
+
+      const finalEmbedding = modulate(trainingRaw);
+
+      const replaySamples = sampleReplay(eng.ewc, 4);
+      const trainingBatch: { embedding: number[]; rating: number }[] = [
+        { embedding: finalEmbedding, rating },
+        ...replaySamples.map((r) => ({
+          embedding: modulate(r.embedding),
+          rating: r.rating,
+        })),
+      ];
+
+      let totalGoodness = 0;
+      for (const sample of trainingBatch) {
+        const liked = sample.rating > 0.5;
+
+        let positive: number[];
+        let negative: number[];
+
+        if (liked) {
+          positive = sample.embedding;
+          // Prefer a real disliked embedding as the hard negative so the
+          // FF decision boundary aligns with actual content the user rejected.
+          // Fall back to corrupted noise when no low-rated history exists yet.
+          const rawHardNeg = sampleHardNegative(eng.ratings, malId);
+          negative = rawHardNeg
+            ? modulate(rawHardNeg)
+            : createCorruptedInput(sample.embedding);
+        } else {
+          // Prefer a real liked embedding as the hard positive.
+          const rawHardPos = sampleHardPositive(eng.ratings, malId);
+          positive = rawHardPos
+            ? modulate(rawHardPos)
+            : createCorruptedInput(sample.embedding);
+          negative = sample.embedding;
+        }
+
+        const g = trainStep(eng.network, positive, negative);
+        totalGoodness += g;
+
+        if (eng.ewc.fisher.length > 0) {
+          applyEWCCorrection(
+            eng.network,
+            eng.ewc.fisher,
+            eng.ewc.optimalWeights,
+            eng.ewc.optimalBiases,
+            80
+          );
+        }
       }
-    }
-    const avgGoodness = totalGoodness / trainingBatch.length;
+      avgGoodness = totalGoodness / trainingBatch.length;
 
-    updateCouplingFromGoodness(eng.kuramoto, Math.tanh(avgGoodness / 5));
-    stepKuramoto(eng.kuramoto, 5);
+      updateCouplingFromGoodness(eng.kuramoto, Math.tanh(avgGoodness / 5));
+      stepKuramoto(eng.kuramoto, 5);
 
-    syncNeurogenesisState(eng.neurogenesis, eng.network.layers.length);
-    const { grown, pruned } = checkNeurogenesis(eng.network, eng.neurogenesis, eng.kuramoto);
+      syncNeurogenesisState(eng.neurogenesis, eng.network.layers.length);
+      const { grown, pruned } = checkNeurogenesis(eng.network, eng.neurogenesis, eng.kuramoto);
 
-    if (grown || pruned) {
-      if (eng.ratings.length >= 5) {
+      if (grown || pruned) {
+        if (eng.ratings.length >= 5) {
+          computeFisher(eng.ewc, eng.network, eng.ratings);
+        }
+      }
+
+      // Store trainingRaw (not animeEmbedding) so the user preference vector
+      // reflects trait/reason nuance when an override was provided.
+      const replayEntry: ReplayEntry = {
+        animeId: malId,
+        embedding: trainingRaw,
+        rating,
+        timestamp: Date.now(),
+      };
+      addToReplay(eng.ewc, replayEntry);
+
+      // Dedup by animeId: mirrors user_ratings in the DB (which upserts on
+      // [userId, malId]) so a later event for the same anime (e.g. a
+      // thumbs-up followed by a watchstate "completed" event) replaces the
+      // old in-memory entry instead of stacking a second one. Without this,
+      // buildUserPreferenceVector would sum both entries and double-count
+      // that anime's embedding with potentially conflicting weights, and it
+      // would also skew hard-negative/positive sampling.
+      eng.ratings = eng.ratings.filter((r) => r.animeId !== malId);
+      eng.ratings.push({ animeId: malId, embedding: trainingRaw, rating, timestamp: Date.now() });
+      if (eng.ratings.length > 1000) eng.ratings.shift();
+
+      if (eng.ratings.length >= 10 && eng.network.epoch % 10 === 0) {
         computeFisher(eng.ewc, eng.network, eng.ratings);
       }
+
+      saved = await persistEngine(userId, eng);
+      if (saved) break;
+
+      // Version conflict: this instance's in-memory copy was stale relative
+      // to the DB (another instance, or a concurrent request that bypassed
+      // the write queue, saved first). If another attempt remains, drop the
+      // stale copy, reload the authoritative latest state, and redo training
+      // against the fresh copy — training is stochastic, so re-running it is
+      // safe and correctly folds in whatever the other writer contributed
+      // instead of clobbering it. On the FINAL attempt, skip the reload: it
+      // would only discard the trained-but-unsaved `eng` we're about to
+      // return goodness/epoch from, for no benefit (the loop is about to end
+      // either way).
+      const willRetry = attempt < MAX_ATTEMPTS - 1;
+      aiLog("warn", "feedback_conflict_retry", { userId, malId, attempt: attempt + 1, maxAttempts: MAX_ATTEMPTS, willRetry });
+      if (!willRetry) break;
+      engines.delete(userId);
+      engineAccessTime.delete(userId);
+      eng = await getEngine(userId);
+      eng.isTraining = true;
     }
 
-    // Store trainingRaw (not animeEmbedding) so the user preference vector
-    // reflects trait/reason nuance when an override was provided.
-    const replayEntry: ReplayEntry = {
-      animeId: malId,
-      embedding: trainingRaw,
-      rating,
-      timestamp: Date.now(),
-    };
-    addToReplay(eng.ewc, replayEntry);
-
-    // Dedup by animeId: mirrors user_ratings in the DB (which upserts on
-    // [userId, malId]) so a later event for the same anime (e.g. a
-    // thumbs-up followed by a watchstate "completed" event) replaces the
-    // old in-memory entry instead of stacking a second one. Without this,
-    // buildUserPreferenceVector would sum both entries and double-count
-    // that anime's embedding with potentially conflicting weights, and it
-    // would also skew hard-negative/positive sampling.
-    eng.ratings = eng.ratings.filter((r) => r.animeId !== malId);
-    eng.ratings.push({ animeId: malId, embedding: trainingRaw, rating, timestamp: Date.now() });
-    if (eng.ratings.length > 1000) eng.ratings.shift();
-
-    if (eng.ratings.length >= 10 && eng.network.epoch % 10 === 0) {
-      computeFisher(eng.ewc, eng.network, eng.ratings);
+    if (!saved) {
+      aiLog("error", "feedback_retries_exhausted", { userId, malId, maxAttempts: MAX_ATTEMPTS });
     }
+
+    // Side effects below run exactly once, after the retry loop, regardless
+    // of how many training attempts it took: saveRating is an upsert
+    // (idempotent on [userId, malId]) and the onboarding unlock check reads
+    // authoritative DB state, so neither needs to be repeated per attempt.
 
     // Persist rating to user_ratings table (T001: this call was missing).
     // user_ratings is the source of truth for the Path 3 unlock check below.
@@ -928,13 +1016,10 @@ export async function processFeedback(
       // at error level (not warn) so this isn't silently lost in production.
       // If this surfaces repeatedly, consider an outbox/retry-queue for
       // failed rating writes instead of a single best-effort attempt.
-      console.error(
-        `[AI] saveRating FAILED after retries for user=${userId} mal_id=${malId} — rating trained into model but NOT persisted to user_ratings:`,
-        e instanceof Error ? e.message : e
-      );
+      aiLog("error", "save_rating_failed", {
+        userId, malId, message: e instanceof Error ? e.message : String(e),
+      });
     }
-
-    await persistEngine(userId, eng);
 
     let justUnlocked = false;
     try {
@@ -945,11 +1030,11 @@ export async function processFeedback(
           await storage.unlockRecommendations(userId);
           await storage.completeOnboarding(userId);
           justUnlocked = true;
-          console.log(`[Path3] Recommendations unlocked for user=${userId} after ${ratings.length} ratings`);
+          aiLog("info", "path3_unlocked", { userId, ratingCount: ratings.length });
         }
       }
     } catch (e) {
-      console.warn("[Path3] Onboarding check failed:", e instanceof Error ? e.message : e);
+      aiLog("warn", "path3_onboarding_check_failed", { userId, message: e instanceof Error ? e.message : String(e) });
     }
 
     return { epoch: eng.network.epoch, goodness: avgGoodness, justUnlocked };
@@ -1043,6 +1128,20 @@ export async function hasRestTrained(userId = "default"): Promise<boolean> {
   return eng.restTrainedAt !== null;
 }
 
+// Unlike hasRestTrained(), this bypasses the in-memory engine cache and reads
+// straight from the DB. Used immediately before kicking off the (expensive,
+// long-running) auto rest-train pass, so a cold-start instance doesn't act on
+// a stale cached engine loaded seconds earlier — reducing (though, given the
+// cache, not eliminating) the odds two instances both run the full pass at
+// once. The versioned save + conflict retry in restTrainLocked() is still the
+// actual correctness guarantee; this is purely a waste-reduction guard.
+export async function hasRestTrainedFresh(userId = "default"): Promise<boolean> {
+  const row = await storage.loadEngineStateVersioned(userId);
+  if (!row) return false;
+  const json = row.json as { restTrainedAt?: number | null };
+  return json.restTrainedAt != null;
+}
+
 export interface RestTrainResult {
   animeCount: number;
   trainedCount: number;
@@ -1052,81 +1151,128 @@ export interface RestTrainResult {
 }
 
 export async function restTrain(userId = "default"): Promise<RestTrainResult> {
-  const eng = await getEngine(userId);
+  // Serialized per-user, same as processFeedback — restTrain and
+  // processFeedback must never run concurrently against the same in-memory
+  // engine object for one user.
+  return enqueueUserWork(userId, () => restTrainLocked(userId));
+}
+
+async function restTrainLocked(userId: string): Promise<RestTrainResult> {
+  let eng = await getEngine(userId);
   const startMs = Date.now();
 
-  console.log("[Star] Starting rest training — building base knowledge...");
+  aiLog("info", "resttrain_start", { userId });
 
   const animeList = await getAllCurrentAnime();
   if (animeList.length === 0) {
     return { animeCount: 0, trainedCount: 0, highQualityCount: 0, elapsedMs: Date.now() - startMs, epoch: eng.network.epoch };
   }
 
-  let trainedCount = 0;
-  let highQualityCount = 0;
+  // Unlike processFeedback, restTrain is a long, low-frequency, one-time-ish
+  // bootstrap pass over the whole catalog (potentially thousands of trainStep
+  // calls) — version-checking per catalog item would mean hundreds of DB
+  // round trips for a single logical operation. Instead: train fully in
+  // memory, then attempt ONE versioned save at the end. If that conflicts,
+  // reload the latest state — if another writer already completed
+  // rest-training in the meantime (restTrainedAt is set), skip re-running
+  // the whole pass; otherwise retry it once against the fresh state.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let trainedCount = 0;
+    let highQualityCount = 0;
+    const fisherDataset: { embedding: number[]; rating: number }[] = [];
 
-  const fisherDataset: { embedding: number[]; rating: number }[] = [];
+    for (const anime of animeList) {
+      try {
+        let embedding = getSharedEmbedding(anime.mal_id);
+        if (!embedding) {
+          embedding = await embedAnimeWithFallback(anime as AnimeInfo);
+          setSharedEmbedding(anime.mal_id, embedding);
+        }
 
-  for (const anime of animeList) {
-    try {
-      let embedding = getSharedEmbedding(anime.mal_id);
-      if (!embedding) {
-        embedding = await embedAnimeWithFallback(anime as AnimeInfo);
-        setSharedEmbedding(anime.mal_id, embedding);
-      }
+        const isHighQuality = (anime.score ?? 0) >= 7.5;
+        const rating = isHighQuality ? 0.75 : 0.5;
 
-      const isHighQuality = (anime.score ?? 0) >= 7.5;
-      const rating = isHighQuality ? 0.75 : 0.5;
+        if (isHighQuality) highQualityCount++;
 
-      if (isHighQuality) highQualityCount++;
+        const modulated = phaseModulatedEmbedding(embedding, eng.kuramoto.textPhases);
+        const finalEmbedding = normalize(modulated);
 
-      const modulated = phaseModulatedEmbedding(embedding, eng.kuramoto.textPhases);
-      const finalEmbedding = normalize(modulated);
-
-      // Neutral awareness pass: all catalog entries trained as positive (anime=valid)
-      trainStep(eng.network, finalEmbedding, createCorruptedInput(finalEmbedding));
-
-      // High-quality: second pass for stronger positive imprint
-      if (isHighQuality) {
+        // Neutral awareness pass: all catalog entries trained as positive (anime=valid)
         trainStep(eng.network, finalEmbedding, createCorruptedInput(finalEmbedding));
+
+        // High-quality: second pass for stronger positive imprint
+        if (isHighQuality) {
+          trainStep(eng.network, finalEmbedding, createCorruptedInput(finalEmbedding));
+        }
+
+        // Fisher on full catalog — all base knowledge is class-1 (worthy of protection)
+        fisherDataset.push({ embedding: finalEmbedding, rating: 0.75 });
+
+        addToReplay(eng.ewc, {
+          animeId: anime.mal_id,
+          embedding,
+          rating,
+          timestamp: Date.now(),
+          isBaseKnowledge: true,
+        });
+
+        trainedCount++;
+      } catch {
+        continue;
       }
-
-      // Fisher on full catalog — all base knowledge is class-1 (worthy of protection)
-      fisherDataset.push({ embedding: finalEmbedding, rating: 0.75 });
-
-      addToReplay(eng.ewc, {
-        animeId: anime.mal_id,
-        embedding,
-        rating,
-        timestamp: Date.now(),
-        isBaseKnowledge: true,
-      });
-
-      trainedCount++;
-    } catch {
-      continue;
     }
+
+    if (fisherDataset.length >= 5) {
+      computeFisher(eng.ewc, eng.network, fisherDataset);
+    }
+
+    updateCouplingFromGoodness(eng.kuramoto, 0.6);
+    stepKuramoto(eng.kuramoto, 10);
+    updateOrderHistory(eng.kuramoto);
+
+    eng.restTrainedAt = Date.now();
+    const saved = await persistEngine(userId, eng);
+    const elapsed = Date.now() - startMs;
+
+    if (saved) {
+      aiLog("info", "resttrain_complete", { userId, trainedCount, highQualityCount, elapsedMs: elapsed });
+      return {
+        animeCount: animeList.length,
+        trainedCount,
+        highQualityCount,
+        elapsedMs: elapsed,
+        epoch: eng.network.epoch,
+      };
+    }
+
+    // Conflict: reload the latest state and check whether another writer
+    // already finished rest-training in the meantime.
+    engines.delete(userId);
+    engineAccessTime.delete(userId);
+    eng = await getEngine(userId);
+    if (eng.restTrainedAt !== null) {
+      aiLog("info", "resttrain_skip_duplicate", { userId });
+      return {
+        animeCount: animeList.length,
+        trainedCount,
+        highQualityCount,
+        elapsedMs: Date.now() - startMs,
+        epoch: eng.network.epoch,
+      };
+    }
+    aiLog("warn", "resttrain_conflict_retry", { userId });
   }
 
-  if (fisherDataset.length >= 5) {
-    computeFisher(eng.ewc, eng.network, fisherDataset);
-  }
-
-  updateCouplingFromGoodness(eng.kuramoto, 0.6);
-  stepKuramoto(eng.kuramoto, 10);
-  updateOrderHistory(eng.kuramoto);
-
-  eng.restTrainedAt = Date.now();
-  await persistEngine(userId, eng);
-
-  const elapsed = Date.now() - startMs;
-  console.log(`[Star] Rest training complete: ${trainedCount} anime trained (${highQualityCount} high-quality) in ${elapsed}ms`);
-
+  // Both attempts conflicted without another writer having finished either —
+  // extremely unlikely (would require two competing rest-training runs on
+  // different instances at the exact same time). Log and return rather than
+  // throwing, since the caller can retry via a fresh request.
+  aiLog("error", "resttrain_retries_exhausted", { userId });
   return {
     animeCount: animeList.length,
-    trainedCount,
-    highQualityCount,
-    elapsedMs: elapsed,
+    trainedCount: 0,
+    highQualityCount: 0,
+    elapsedMs: Date.now() - startMs,
     epoch: eng.network.epoch,
   };
 }
