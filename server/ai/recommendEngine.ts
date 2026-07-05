@@ -823,15 +823,14 @@ export async function processFeedback(
     };
     addToReplay(eng.ewc, replayEntry);
 
-    // NOTE: no dedup by animeId here — unlike user_ratings in the DB (which
-    // upserts on [userId, malId]), this in-memory array will hold a separate
-    // entry per processFeedback call for the same anime (e.g. a thumbs-up
-    // followed later by a watchstate "completed" event). buildUserPreferenceVector
-    // sums every entry, so the same anime's embedding can be double-counted
-    // with conflicting weights, and it also skews hard-negative/positive
-    // sampling. The FIFO cap below evicts the oldest entry, not necessarily
-    // the stale duplicate. If this surfaces, fix by removing any existing
-    // entry with the same animeId before pushing the new one.
+    // Dedup by animeId: mirrors user_ratings in the DB (which upserts on
+    // [userId, malId]) so a later event for the same anime (e.g. a
+    // thumbs-up followed by a watchstate "completed" event) replaces the
+    // old in-memory entry instead of stacking a second one. Without this,
+    // buildUserPreferenceVector would sum both entries and double-count
+    // that anime's embedding with potentially conflicting weights, and it
+    // would also skew hard-negative/positive sampling.
+    eng.ratings = eng.ratings.filter((r) => r.animeId !== malId);
     eng.ratings.push({ animeId: malId, embedding: trainingRaw, rating, timestamp: Date.now() });
     if (eng.ratings.length > 1000) eng.ratings.shift();
 

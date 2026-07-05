@@ -303,17 +303,23 @@ export async function processChat(
     const signalWrites: Promise<void>[] = [];
     for (const genre of signals.likedGenres) {
       signalWrites.push(
-        storage.savePersonalitySignal(userId, "genre_like", genre, 1.0, "chat").catch(() => {})
+        storage.savePersonalitySignal(userId, "genre_like", genre, 1.0, "chat").catch((e) =>
+          console.warn(`[Star] savePersonalitySignal(genre_like=${genre}) failed for user=${userId}:`, e instanceof Error ? e.message : e)
+        )
       );
     }
     for (const genre of signals.dislikedGenres) {
       signalWrites.push(
-        storage.savePersonalitySignal(userId, "genre_dislike", genre, 1.0, "chat").catch(() => {})
+        storage.savePersonalitySignal(userId, "genre_dislike", genre, 1.0, "chat").catch((e) =>
+          console.warn(`[Star] savePersonalitySignal(genre_dislike=${genre}) failed for user=${userId}:`, e instanceof Error ? e.message : e)
+        )
       );
     }
     for (const genre of signals.moodGenres) {
       signalWrites.push(
-        storage.savePersonalitySignal(userId, "mood_genre", genre, 0.7, "chat").catch(() => {})
+        storage.savePersonalitySignal(userId, "mood_genre", genre, 0.7, "chat").catch((e) =>
+          console.warn(`[Star] savePersonalitySignal(mood_genre=${genre}) failed for user=${userId}:`, e instanceof Error ? e.message : e)
+        )
       );
     }
     Promise.all(signalWrites).catch(() => {});
