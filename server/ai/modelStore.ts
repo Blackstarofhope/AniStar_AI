@@ -15,7 +15,10 @@ export interface ModelState {
   neurogenesis: NeurogenesisState;
   ewc: EWCState;
   ratings: { animeId: number; embedding: number[]; rating: number; timestamp: number }[];
-  allAnimeEmbeddings: { animeId: number; embedding: number[] }[];
+  /** Legacy field, kept optional for reading old saves. Embeddings now live in
+   *  the shared `anime_embeddings` table (see recommendEngine.ts) and are no
+   *  longer written here. */
+  allAnimeEmbeddings?: { animeId: number; embedding: number[] }[];
   restTrainedAt?: number;
   savedAt: string;
   /** Star's chat learning state — optional so existing saves load cleanly. */

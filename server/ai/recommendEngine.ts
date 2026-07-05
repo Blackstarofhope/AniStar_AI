@@ -75,7 +75,6 @@ interface EngineState {
   neurogenesis: NeurogenesisState;
   ewc: EWCState;
   ratings: { animeId: number; embedding: number[]; rating: number; timestamp: number }[];
-  allAnimeEmbeddings: { animeId: number; embedding: number[] }[];
   isTraining: boolean;
   restTrainedAt: number | null;
 }
@@ -87,11 +86,81 @@ const MAX_USER_ENGINES = 5;
 const INACTIVITY_MS = 5 * 60 * 1000; // 5 minutes
 let clipPreloadDone = false;
 
+// ---------------------------------------------------------------------------
+// Shared anime embedding cache
+// Anime embeddings are derived purely from anime content (title/genres/score/
+// studio), not from any user's preferences, so they used to be wastefully
+// duplicated into every user's EngineState (and thus every userEngineState
+// DB row) — identical data copied once per user. They now live in one
+// process-local Map backed by the shared `anime_embeddings` table, so every
+// user (and, once loaded, every engine on this instance) reads the same
+// entries instead of each recomputing/re-storing them independently.
+// This does NOT need per-instance sync: a cache miss just re-embeds and
+// writes through, which is idempotent and cheap, so different instances
+// converging on the same values over time is fine.
+// ---------------------------------------------------------------------------
+const MAX_SHARED_EMBEDDINGS = 2000;
+const sharedAnimeEmbeddings = new Map<number, number[]>();
+let sharedEmbeddingsLoadPromise: Promise<void> | null = null;
+
+function ensureSharedEmbeddingsLoaded(): Promise<void> {
+  if (!sharedEmbeddingsLoadPromise) {
+    sharedEmbeddingsLoadPromise = (async () => {
+      try {
+        const rows = await storage.getAllAnimeEmbeddings();
+        for (const row of rows) {
+          if (row.embedding.length === EMBEDDING_DIM) {
+            sharedAnimeEmbeddings.set(row.malId, row.embedding);
+          }
+        }
+        console.log(`[AI] Loaded ${sharedAnimeEmbeddings.size} shared anime embeddings from DB.`);
+      } catch (e) {
+        console.warn("[AI] Failed to load shared anime embeddings from DB:", e instanceof Error ? e.message : e);
+      }
+    })();
+  }
+  return sharedEmbeddingsLoadPromise;
+}
+
+function getSharedEmbedding(animeId: number): number[] | undefined {
+  return sharedAnimeEmbeddings.get(animeId);
+}
+
+function setSharedEmbedding(animeId: number, embedding: number[]): void {
+  if (!sharedAnimeEmbeddings.has(animeId) && sharedAnimeEmbeddings.size >= MAX_SHARED_EMBEDDINGS) {
+    const oldestKey = sharedAnimeEmbeddings.keys().next().value;
+    if (oldestKey !== undefined) sharedAnimeEmbeddings.delete(oldestKey);
+  }
+  sharedAnimeEmbeddings.set(animeId, embedding);
+  // Fire-and-forget is acceptable here (unlike persistEngine): this is a
+  // recomputable content cache, not user data. A failed write just means the
+  // next request re-embeds this anime — no data loss, only wasted compute.
+  storage.saveAnimeEmbedding(animeId, embedding).catch((e) =>
+    console.warn(`[AI] Failed to persist shared anime embedding for malId=${animeId}:`, e instanceof Error ? e.message : e)
+  );
+}
+
+// One-time migration path: old per-user saves (file or DB) carried their own
+// allAnimeEmbeddings array. Seed anything not already in the shared cache so
+// previously-computed embeddings aren't silently discarded/recomputed.
+function seedSharedEmbeddingsFromLegacy(
+  entries: { animeId: number; embedding: number[] }[] | undefined
+): void {
+  if (!entries) return;
+  for (const e of entries) {
+    if (e.embedding.length === EMBEDDING_DIM && !sharedAnimeEmbeddings.has(e.animeId)) {
+      setSharedEmbedding(e.animeId, e.embedding);
+    }
+  }
+}
+
 async function initEngine(userId: string): Promise<EngineState> {
   if (!clipPreloadDone) {
     clipPreloadDone = true;
     loadCLIP().catch((e) => console.warn("[CLIP] Failed to preload:", e));
   }
+
+  await ensureSharedEmbeddingsLoaded();
 
   // For "default": try file-based first for backward compatibility
   if (userId === "default") {
@@ -100,9 +169,7 @@ async function initEngine(userId: string): Promise<EngineState> {
       const firstHiddenSize = saved.network.layers[0]?.biases?.length ?? 0;
       const expectedHiddenSize = LAYER_SIZES[1];
       if (firstHiddenSize === expectedHiddenSize) {
-        const validEmbeddings = (saved.allAnimeEmbeddings || []).filter(
-          (e) => e.embedding.length === EMBEDDING_DIM
-        );
+        seedSharedEmbeddingsFromLegacy(saved.allAnimeEmbeddings);
         const kura = saved.kuramoto;
         if (!kura.vibePhases || kura.vibePhases.length !== kura.textPhases.length) {
           kura.vibePhases = Array.from(
@@ -116,7 +183,6 @@ async function initEngine(userId: string): Promise<EngineState> {
           neurogenesis: saved.neurogenesis,
           ewc: saved.ewc,
           ratings: saved.ratings || [],
-          allAnimeEmbeddings: validEmbeddings,
           isTraining: false,
           restTrainedAt: saved.restTrainedAt ?? null,
         };
@@ -138,7 +204,7 @@ async function initEngine(userId: string): Promise<EngineState> {
         neurogenesis: NeurogenesisState;
         ewc: EWCState;
         ratings: { animeId: number; embedding: number[]; rating: number; timestamp: number }[];
-        allAnimeEmbeddings: { animeId: number; embedding: number[] }[];
+        allAnimeEmbeddings?: { animeId: number; embedding: number[] }[];
         restTrainedAt?: number | null;
       };
       const firstHiddenSize = s.network?.layers?.[0]?.biases?.length ?? 0;
@@ -150,9 +216,7 @@ async function initEngine(userId: string): Promise<EngineState> {
             () => Math.random() * 2 * Math.PI
           );
         }
-        const validEmbeddings = (s.allAnimeEmbeddings || []).filter(
-          (e) => e.embedding.length === EMBEDDING_DIM
-        );
+        seedSharedEmbeddingsFromLegacy(s.allAnimeEmbeddings);
         console.log(`[AI] Loaded engine for user "${userId}" from DB.`);
         return {
           network: deserializeNetwork(s.network),
@@ -160,7 +224,6 @@ async function initEngine(userId: string): Promise<EngineState> {
           neurogenesis: s.neurogenesis,
           ewc: s.ewc,
           ratings: s.ratings || [],
-          allAnimeEmbeddings: validEmbeddings,
           isTraining: false,
           restTrainedAt: s.restTrainedAt ?? null,
         };
@@ -176,7 +239,6 @@ async function initEngine(userId: string): Promise<EngineState> {
     neurogenesis: createNeurogenesisState(LAYER_SIZES.length - 1),
     ewc: createEWCState(),
     ratings: [],
-    allAnimeEmbeddings: [],
     isTraining: false,
     restTrainedAt: null,
   };
@@ -200,7 +262,11 @@ async function getEngine(userId: string): Promise<EngineState> {
         }
         if (oldestKey) {
           const evicted = engines.get(oldestKey);
-          if (evicted) persistEngine(oldestKey, evicted).catch(() => {});
+          if (evicted) {
+            persistEngine(oldestKey, evicted).catch((e) =>
+              console.error(`[AI] Failed to persist evicted engine for "${oldestKey}":`, e instanceof Error ? e.message : e)
+            );
+          }
           engines.delete(oldestKey);
           engineAccessTime.delete(oldestKey);
         }
@@ -225,13 +291,23 @@ async function persistEngine(userId: string, eng: EngineState): Promise<void> {
     neurogenesis: eng.neurogenesis,
     ewc: eng.ewc,
     ratings: eng.ratings,
-    allAnimeEmbeddings: eng.allAnimeEmbeddings,
     restTrainedAt: eng.restTrainedAt ?? null,
   };
 
-  storage.saveEngineState(userId, json).catch((e) =>
-    console.warn(`[AI] Failed to save engine state to DB for "${userId}":`, e instanceof Error ? e.message : e)
-  );
+  // MUST be awaited: callers of persistEngine() rely on the save having
+  // actually completed (e.g. before responding to the client, or before the
+  // engine is evicted from memory). Previously this was fire-and-forget, so
+  // "await persistEngine(...)" was misleading — on a slow or throttled
+  // instance (e.g. Cloud Run pausing CPU shortly after the response is
+  // sent), the write could be silently dropped before it ever reached the DB.
+  try {
+    await storage.saveEngineState(userId, json);
+  } catch (e) {
+    console.error(
+      `[AI] Failed to save engine state to DB for "${userId}" — trained state for this session may be lost:`,
+      e instanceof Error ? e.message : e
+    );
+  }
 
   // For "default", also keep file-based for backward compatibility
   if (userId === "default") {
@@ -242,7 +318,6 @@ async function persistEngine(userId: string, eng: EngineState): Promise<void> {
       neurogenesis: eng.neurogenesis,
       ewc: eng.ewc,
       ratings: eng.ratings,
-      allAnimeEmbeddings: eng.allAnimeEmbeddings,
       restTrainedAt: eng.restTrainedAt ?? undefined,
       savedAt: new Date().toISOString(),
     };
@@ -256,7 +331,11 @@ setInterval(() => {
   for (const [userId, lastAccess] of engineAccessTime) {
     if (now - lastAccess > INACTIVITY_MS) {
       const eng = engines.get(userId);
-      if (eng) persistEngine(userId, eng).catch(() => {});
+      if (eng) {
+        persistEngine(userId, eng).catch((e) =>
+          console.error(`[AI] Failed to persist idle-evicted engine for "${userId}":`, e instanceof Error ? e.message : e)
+        );
+      }
       engines.delete(userId);
       engineAccessTime.delete(userId);
     }
@@ -345,19 +424,13 @@ async function scoreAnimeList(
 ): Promise<{ anime: AnimeScheduleItem; score: number; embedding: number[]; cosSim: number; ffScore: number }[]> {
   const scored: { anime: AnimeScheduleItem; score: number; embedding: number[]; cosSim: number; ffScore: number }[] = [];
 
-  const embeddingCache = new Map<number, number[]>(
-    eng.allAnimeEmbeddings.map((e) => [e.animeId, e.embedding])
-  );
-
   await Promise.all(
     animeList.map(async (anime) => {
       try {
-        let embedding = embeddingCache.get(anime.mal_id);
+        let embedding = getSharedEmbedding(anime.mal_id);
         if (!embedding) {
           embedding = await embedAnimeWithVibeFallback(anime as AnimeInfo);
-          embeddingCache.set(anime.mal_id, embedding);
-          eng.allAnimeEmbeddings.push({ animeId: anime.mal_id, embedding });
-          if (eng.allAnimeEmbeddings.length > 2000) eng.allAnimeEmbeddings.shift();
+          setSharedEmbedding(anime.mal_id, embedding);
         }
 
         const textModulated = phaseModulatedEmbedding(embedding, eng.kuramoto.textPhases);
@@ -699,8 +772,8 @@ function sampleHardPositive(
 // trainingEmbeddingOverride (T004): callers (Path 1 reason blending, Path 2
 // character trait blending) may supply a pre-blended embedding for FF training.
 // The override goes into eng.ratings (shaping the user preference vector) but
-// the canonical anime embedding still goes into allAnimeEmbeddings (used for
-// recommendation cosine scoring), keeping the two concerns separate.
+// the canonical anime embedding still goes into the shared embedding cache
+// (used for recommendation cosine scoring), keeping the two concerns separate.
 // ---------------------------------------------------------------------------
 
 export async function processFeedback(
@@ -723,15 +796,15 @@ export async function processFeedback(
   eng.isTraining = true;
 
   try {
-    // Always resolve the canonical anime embedding for allAnimeEmbeddings.
-    let animeEmbedding = eng.allAnimeEmbeddings.find((e) => e.animeId === malId)?.embedding;
+    // Always resolve the canonical anime embedding from the shared cache.
+    let animeEmbedding = getSharedEmbedding(malId);
 
     if (!animeEmbedding) {
       const animeList = await getAllCurrentAnime();
       const anime = animeList.find((a) => a.mal_id === malId);
       if (anime) {
         animeEmbedding = await embedAnimeWithVibeFallback(anime as AnimeInfo);
-        eng.allAnimeEmbeddings.push({ animeId: malId, embedding: animeEmbedding });
+        setSharedEmbedding(malId, animeEmbedding);
       } else {
         const vec = new Array(EMBEDDING_DIM).fill(0.1);
         animeEmbedding = normalize(vec);
@@ -951,17 +1024,16 @@ export function getTopAnimeByGenres(
     .slice(0, limit);
 }
 
+// userId is no longer used for anything (embeddings are shared across all
+// users), but the parameter is kept so existing call sites don't need to change.
 export async function addAnimeEmbeddings(
-  userId: string,
+  _userId: string,
   entries: { animeId: number; embedding: number[] }[]
 ): Promise<void> {
-  const eng = await getEngine(userId);
-  const existingIds = new Set(eng.allAnimeEmbeddings.map((e) => e.animeId));
+  await ensureSharedEmbeddingsLoaded();
   for (const entry of entries) {
-    if (!existingIds.has(entry.animeId)) {
-      eng.allAnimeEmbeddings.push(entry);
-      existingIds.add(entry.animeId);
-      if (eng.allAnimeEmbeddings.length > 2000) eng.allAnimeEmbeddings.shift();
+    if (!sharedAnimeEmbeddings.has(entry.animeId)) {
+      setSharedEmbedding(entry.animeId, entry.embedding);
     }
   }
 }
@@ -990,10 +1062,6 @@ export async function restTrain(userId = "default"): Promise<RestTrainResult> {
     return { animeCount: 0, trainedCount: 0, highQualityCount: 0, elapsedMs: Date.now() - startMs, epoch: eng.network.epoch };
   }
 
-  const embeddingCache = new Map<number, number[]>(
-    eng.allAnimeEmbeddings.map((e) => [e.animeId, e.embedding])
-  );
-
   let trainedCount = 0;
   let highQualityCount = 0;
 
@@ -1001,12 +1069,10 @@ export async function restTrain(userId = "default"): Promise<RestTrainResult> {
 
   for (const anime of animeList) {
     try {
-      let embedding = embeddingCache.get(anime.mal_id);
+      let embedding = getSharedEmbedding(anime.mal_id);
       if (!embedding) {
         embedding = await embedAnimeWithFallback(anime as AnimeInfo);
-        embeddingCache.set(anime.mal_id, embedding);
-        eng.allAnimeEmbeddings.push({ animeId: anime.mal_id, embedding });
-        if (eng.allAnimeEmbeddings.length > 2000) eng.allAnimeEmbeddings.shift();
+        setSharedEmbedding(anime.mal_id, embedding);
       }
 
       const isHighQuality = (anime.score ?? 0) >= 7.5;

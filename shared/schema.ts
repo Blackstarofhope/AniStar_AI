@@ -12,6 +12,17 @@ export const animeSearched = pgTable("anime_searched", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Anime embeddings are content-derived (from title/genres/score/etc via CLIP/text
+// embedder), not user-specific. They were previously duplicated into every
+// user's engine state blob (userEngineState.engineJson), which multiplied
+// storage/write cost by the number of users for identical data. Storing them
+// once here, shared across all users and instances, fixes that.
+export const animeEmbeddings = pgTable("anime_embeddings", {
+  malId: integer("mal_id").primaryKey(),
+  embedding: jsonb("embedding").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const vibeProfiles = pgTable("vibe_profiles", {
   malId: integer("mal_id").primaryKey(),
   profile: jsonb("profile").notNull(),

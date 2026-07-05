@@ -3,7 +3,7 @@ import { Pool } from "pg";
 import { randomUUID } from "crypto";
 import { and, eq, inArray, isNotNull, lt, sql } from "drizzle-orm";
 import {
-  userEngineState, animeSearched, vibeProfiles,
+  userEngineState, animeSearched, animeEmbeddings, vibeProfiles,
   userRatings, animeDiscovery, userProfiles,
   userBanList, userWatchState, userPreferences, userChatUsage,
   userOnboarding, userCharacterRatings, animeReasons, userPersonalitySignals,
@@ -42,6 +42,9 @@ export interface IStorage {
 
   saveSearchedAnime(malId: number, data: object): Promise<void>;
   getAllSearchedAnime(): Promise<{ malId: number; data: object }[]>;
+
+  saveAnimeEmbedding(malId: number, embedding: number[]): Promise<void>;
+  getAllAnimeEmbeddings(): Promise<{ malId: number; embedding: number[] }[]>;
 
   saveVibeProfile(malId: number, profile: object): Promise<void>;
   getVibeProfile(malId: number): Promise<object | null>;
@@ -179,6 +182,28 @@ class PostgresStorage implements IStorage {
         .select()
         .from(animeSearched)
         .then((rows) => rows.map((r) => ({ malId: r.malId, data: r.data as object })))
+    );
+  }
+
+  async saveAnimeEmbedding(malId: number, embedding: number[]): Promise<void> {
+    return this.withRetry(() =>
+      db
+        .insert(animeEmbeddings)
+        .values({ malId, embedding, updatedAt: new Date() })
+        .onConflictDoUpdate({
+          target: animeEmbeddings.malId,
+          set: { embedding, updatedAt: new Date() },
+        })
+        .then(() => undefined)
+    );
+  }
+
+  async getAllAnimeEmbeddings(): Promise<{ malId: number; embedding: number[] }[]> {
+    return this.withRetry(() =>
+      db
+        .select()
+        .from(animeEmbeddings)
+        .then((rows) => rows.map((r) => ({ malId: r.malId, embedding: r.embedding as number[] })))
     );
   }
 
